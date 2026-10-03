@@ -24,12 +24,18 @@ unsafe wakeup. Keeping the existing priority-130 sentinel on top by changing
 the task to priority 139 avoids that branch, but the following live attempt
 lost shell service before its final trace could be retained.
 
-The active build logs immediately before and after the scheduler call and has
-a boot-id proof mode. It uses the same one-left-child graph to redirect the
-boot-id sysctl data pointer to the pinned fake table, then verifies the exact
-16-byte value through procfs. This proves the constrained write and its return
-path without changing `ashmem_misc.fops`. Once that checkpoint succeeds, the
-planned order is:
+The retained trace from the boot-id proof showed that `sched_setattr` entered
+but did not return, while the boot ID remained unchanged. This confines the
+stall to acquisition of the reclaimed-page fake mutex before `rb_erase`.
+
+The active build avoids that dependency. It copies only the forged `rb_node`
+through `sendmmsg`, preserving the dangling waiter's legitimate PI-mutex
+pointer and all later waiter fields. A new priority-130 helper blocks on that
+same real mutex after the owner-chain timeout. It supplies a valid
+kernel-managed top waiter while the vulnerable task changes from priority 120
+to 139. The next boot-id proof therefore uses the real lock, real owner and
+real sentinel for the full return path; only the stale node's rb-tree links
+are forged. Once that checkpoint succeeds, the planned order is:
 
 1. Verify arbitrary kernel read and write and restore `ashmem_misc.fops`.
 2. Dump the live `adbd` credential layout without modifying it.

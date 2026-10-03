@@ -723,3 +723,19 @@ back through `/proc/sys/kernel/random/boot_id`. Output will be retained in a
 file across reboot.
 
 Current result: hardware echo cancellation remains enabled.
+
+75. A reboot-persistent trace located the priority-139 attempt precisely. The
+consumer entered `sched_setattr`, never returned, and consumed one CPU in
+kernel context. Reading `/proc/sys/kernel/random/boot_id` concurrently still
+returned the original UUID, proving the constrained `rb_erase` write had not
+executed. The stall is therefore in acquisition of the reclaimed-page fake
+mutex, before the tree operation. The next route no longer forges the waiter
+lock pointer. `sendmmsg` copies only the eight-byte prefix and 0x18-byte
+`rb_node`, preserving the stale waiter's legitimate task, priority and live
+PI-mutex pointer. After the original owner-chain timeout, a helper thread at
+priority 130 blocks on that real PI mutex and supplies a valid kernel-managed
+sentinel. Changing the vulnerable task from priority 120 to 139 then forces
+the forged dequeue while keeping the helper as the top waiter, allowing the
+real owner and lock graph to provide the return path.
+
+Current result: hardware echo cancellation remains enabled.
