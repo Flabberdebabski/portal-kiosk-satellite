@@ -625,6 +625,7 @@ prove that rb_erase performed its constrained write.
 
 Current result: hardware echo cancellation remains enabled.
 
+
 68. The first scratch completion used a forged waiter priority of 139, which
 could match the WAIT_REQUEUE_PI task after nice 19 and let rt_mutex_adjust_pi
 return before rb_erase. A live fops attempt with priority 139 confirmed that
@@ -757,5 +758,97 @@ waiter tree. The full sendmmsg copy points the forged waiter at this lock; an
 ownerless requeue wakes init_task, which is already runnable, and returns.
 This one-shot diagnostic dirties the debug lock's waiter tree and must be
 followed by reboot unless the resulting kernel-write primitive restores it.
+
+Current result: hardware echo cancellation remains enabled.
+
+77. The static-mutex run did reach `rt_mutex_adjust_prio_chain` with both the
+expected stale waiter and the requested `msm_bus_dbg_cllist_lock` direct-map
+alias. It faulted in `_raw_spin_trylock` because that alias was unmapped. The
+faulting alias was exactly 1 GiB below the alias reconstructed independently
+from the panic task's valid direct-map stack pointer. This is consistent with
+the leaked `mm_struct` slab page having fallen back from the nearly depleted
+Normal zone into the upper half of DMA: the old reconstruction always assumed
+that the slab page was in Normal, shifting `memstart_addr` by one 1-GiB
+alignment unit when that assumption was false. Current Normal free pages sit
+at approximately the zone low watermark, so this fallback is realistic during
+the multi-process slab grooming run. The build now logs all three possible
+2/3/4-GiB physical-zone reconstructions and has a diagnostic-only page leak
+mode that performs no scheduler trigger. It also accepts an explicit zone or
+verified `memstart_addr` for the eventual live route.
+
+Current result: hardware echo cancellation remains enabled.
+
+78. The five- and eight-collision diagnostic runs found timing candidates but
+no `mm_struct`; a four-collision run completed twice and both independent
+leaks produced the same three possible `memstart_addr` values. The ambiguity
+is exactly the physical 2/3/4-GiB zone number, not a variable hash result.
+The build can now precondition the Normal zone with a temporary anonymous
+memory balloon before slab grooming. More significantly, a new release mode
+uses the absolute timeout already supported by `FUTEX_WAIT_REQUEUE_PI` instead
+of delivering SIGUSR1. This should leave the stale waiter's legitimate task
+and PI-mutex pointers intact. The partial `sendmmsg` copy then replaces only
+the vulnerable rb-node fields and can use the real kernel-owned mutex without
+requiring any direct-map reconstruction for lock acquisition. This path still
+needs a live non-writing scheduler control before a constrained write.
+
+Current result: hardware echo cancellation remains enabled.
+
+79. Reading the reboot bugreport's arm64 virtual-memory layout provides the
+exact live linear-map range directly; it is no longer necessary to infer
+`memstart_addr` from the physical zone of the leaked slab. With that exact
+base, the static-lock route acquired `msm_bus_dbg_cllist_lock` and advanced
+from `_raw_spin_trylock` to `rt_mutex_adjust_prio_chain+0x1c0`. It then
+dereferenced address `0x38`: disassembly shows that instruction loads
+`lock->waiters.rb_leftmost->lock`, and the idle static mutex has an empty
+waiter tree. The next route uses `proc_uid_lock`, whose address is also known
+from the exact image. A controlled cold ext4 page fault pauses one
+`/proc/uid` enumeration while it owns that mutex, and a second enumeration
+queues a legitimate priority-130 top waiter. This supplies the valid
+kernel-managed owner and leftmost waiter that the constrained rb-tree removal
+requires.
+
+Current result: hardware echo cancellation remains enabled.
+
+80. A second `/proc/uid` enumeration cannot serve as the real top waiter for
+`proc_uid_lock`. `iterate_dir()` first takes the directory inode's write-side
+`i_rwsem`, so the second enumeration blocks before reaching `proc_uid_lock`.
+An app-process creation does reach the lock independently through UID
+registration. Starting the debuggable `me.jxl.portalreadprobe` process while a
+nice-19 holder is stopped in an ext4-backed `getdents64` copy boosts that holder
+from kernel priority 139 to 120. This priority inheritance is definitive proof
+that a normal-priority real waiter is queued on the mutex, unlike a nonzero
+`wchan` alone.
+
+81. The first app-process sentinel runs, with 64 and then 256 retained mappings,
+still faulted at `rt_mutex_adjust_prio_chain+0x1c0`. Ramoops again showed the
+correct `proc_uid_lock` alias in x20 but a NULL `lock->waiters.rb_leftmost`.
+The retained timestamps identified the cause: panic-proof `O_SYNC` logging ran
+after the PI check and before `sched_setattr`. A release log held the global log
+mutex while ext4 completed the truncate, and the consumer's entry log then
+waited behind it for roughly ten seconds. The real waiter had left before the
+scheduler entered the chain walk. The consumer now performs no disk logging in
+that interval and rechecks the holder's donated priority immediately before the
+scheduler call. It also accepts only `sk_stream_wait_memory` as proof that
+`sendmmsg` has copied the complete waiter; transient `avc_has_perm` and
+`notif_lock` waits are no longer sufficient.
+
+82. Moving signal return before the lock gate closes the remaining lifetime
+race. The vulnerable waiter now completes its interrupted futex cleanup and
+parks at a userspace barrier. The gate then starts the ext4 truncate, blocks the
+nice-19 `/proc/uid` holder, and uses a pre-forked `run-as
+me.jxl.portalreadprobe` process to queue directly through UID registration.
+After the holder's kernel priority is observed at 120, the barrier releases the
+waiter directly into `sendmmsg`. A scheduler-disabled control reached
+`sk_stream_wait_memory` with holder priority 20 in `/proc` (kernel priority
+120), nice 19, and both holder and truncate still active (`proc_done=0/0`).
+This verifies the real top waiter survives at the exact scheduler boundary.
+
+83. The first live run with the reordered gate used the exact current-boot
+`memstart_addr` `0xffffffcdc0000000` and passed page reclaim and stale-waiter
+setup. The ADB shell then disconnected and the device rebooted before a return
+trace, rather than producing the previous userspace continuation. The reboot's
+ramoops record has not yet been collected because network ADB came back
+disabled. Its fault PC will determine whether the forged dequeue advanced past
+the old `+0x1c0` NULL dereference into `rb_erase` or a later invariant.
 
 Current result: hardware echo cancellation remains enabled.
