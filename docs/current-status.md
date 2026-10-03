@@ -1,51 +1,42 @@
 # Current exploit status
 
-The installed `remove_waiter` implementation is vulnerable to GhostLock. The
-Portal-specific port has established:
+The Portal Go's installed 4.9.227 kernel is vulnerable to GhostLock. The
+build-specific port now has a deterministic stale `rt_mutex_waiter` copy from
+native `sendmmsg`, a verified priority-120 real waiter on `proc_uid_lock`, and
+a working constrained kernel write through the vulnerable dequeue path.
 
-- Exact task offsets, including `pi_lock` at `0x8fc` and `pi_blocked_on` at
-  `0x918`
-- Full 256 GiB direct-map scanning plus exact current-boot `memstart_addr`
-  recovery from the kernel memory-layout log
-- Reliable order-2 slab reclaim with the full socket spray
-- Exact stale waiter placement at syscall stack offset `-0x288`
-- A coherent complete-waiter copy from native `sendmmsg` while it sleeps in
-  `sk_stream_wait_memory`
-- A verified real priority-120 top waiter on the kernel's `proc_uid_lock`
+The current boot's randomized `_text` can be recovered without the fragile
+first exploit stage. Android's bundled `simpleperf` records raw kernel PCs;
+the frequent `el0_svc_naked+0x34` sample identifies the runtime base. The
+exploit accepts that verified address through `GHOSTLOCK_KASLR_BASE` and uses
+canonical KASLR-adjusted addresses for `proc_uid_lock` and write targets.
 
-The active route points the forged waiter's lock field at the exact direct-map
-alias of `proc_uid_lock`. A nice-19 `/proc/uid` enumeration owns that mutex and
-blocks while copying to an ext4 page fault. A pre-forked `run-as` process then
-switches directly to the debuggable helper app's UID and queues through kernel
-UID registration. The holder's priority changing from 139 to 120 proves that
-the real waiter is present.
+The constrained write is proven. A held diagnostic redirected the boot-ID
+sysctl data pointer to the reclaimed-page candidate and read back its first 16
+bytes. The scheduler operation returned zero before the later legitimate
+`run-as` waiter panicked in `rb_next()` while traversing the deliberately
+damaged mutex tree.
 
-Signal return now completes before this lock gate starts. The stale waiter
-parks at a userspace barrier; after the real waiter is verified, the barrier
-releases it directly into `sendmmsg`. The consumer accepts only
-`sk_stream_wait_memory`, performs no synchronous disk logging in the critical
-interval, and rechecks the holder's donated priority immediately before
-`sched_setattr`. The scheduler-disabled control passed with priority 120 and
-both the holder and truncate still active.
+The next boundary is reliable socket-page reclamation. An attempted ashmem
+FOPS pivot reached `misc_open()`, but the fake table's owner field contained
+`0xc`; `try_module_get()` faulted on that value. The page had been reused by
+the large proc-lock gate setup instead of retaining the socket payload. The
+gate's 64 GiB of shared mappings is now prepared while the leaked `mm_struct`
+is still pinned, before the target slab page is freed and immediately sprayed.
+The next live checkpoint will verify arbitrary kernel read/write and stop
+before credential mutation.
 
-The first live run with this ordering disconnected ADB and rebooted the Portal.
-Its ramoops record is the immediate next input. Network access is back, but the
-Portal's TCP ADB switch must be toggled before the record can be collected. The
-fault PC will show whether execution advanced past the previous
-`rt_mutex_adjust_prio_chain+0x1c0` NULL dereference into `rb_erase` or a later
-invariant.
+After that checkpoint, the remaining sequence is:
 
-After the constrained write is stable, the remaining sequence is:
-
-1. Redirect `ashmem_misc.fops`, verify bounded kernel read/write, and restore
-   the original pointer.
-2. Locate and inspect the live `adbd` task and credential layout.
-3. Apply the existing bounded credential and SELinux changes.
-4. Open a fresh root ADB shell.
-5. Call Meta's protected audio service with
-   `setAudioProcessingParam(3001, 0)` and disable the related NS/AGC parameters
-   if necessary.
-6. Verify the microphone signal during speaker playback and test whether the
-   setting survives capture restarts or needs a boot-time reapplication.
+1. Use the configfs-based primitive to read the canonical `memstart_addr` and
+   configure the live direct-map translation.
+2. Patch the running `adbd` credentials and set SELinux permissive with the
+   existing bounded configfs writes.
+3. Open a fresh root ADB shell.
+4. Call Meta's protected audio service with
+   `setAudioProcessingParam(3001, 0)`, followed by the NS and AGC parameters
+   if required.
+5. Verify microphone capture during speaker playback and determine whether
+   the setting must be reapplied after audio-service or device restarts.
 
 Hardware echo cancellation remains enabled.

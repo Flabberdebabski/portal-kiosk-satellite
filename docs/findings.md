@@ -852,3 +852,52 @@ disabled. Its fault PC will determine whether the forged dequeue advanced past
 the old `+0x1c0` NULL dereference into `rb_erase` or a later invariant.
 
 Current result: hardware echo cancellation remains enabled.
+
+84. The reordered proc-lock run's ramoops record showed a late panic in the
+legitimate `run-as` waiter, not in the scheduler consumer. The forged scheduler
+operation had returned zero. After the exploit child released its gates,
+`run-as` entered `proc_register_uid`, attempted to take `proc_uid_lock`, and
+faulted in `rb_next+0x1c` on a poisoned parent link. The forged waiter had used
+the direct-map alias while the live lock graph used its canonical address; the
+route now uses `canon_addr(SLIDE_PROC_UID_LOCK_IMAGE)` consistently.
+
+85. Android's bundled `simpleperf` provides a repeatable KASLR disclosure on
+this build even though kallsyms names are hidden. A one-second `cpu-clock`
+record includes raw kernel callchain PCs. Samples ending in `0x3d7e` identify
+`el0_svc_naked+0x34`, so subtracting `0x3d7e` yields the current runtime
+`_text`. The exploit now validates and accepts that base through
+`GHOSTLOCK_KASLR_BASE`. A separate ARM64 `PRFM` timing scan did not distinguish
+the mapped 128 MiB kernel-module range from adjacent holes and is retained only
+as a negative diagnostic.
+
+86. With the canonical proc lock, the scheduler consumer again returned zero.
+The child then exited and the real waiter later panicked in `rb_next`, proving
+that cleanup, rather than the constrained write itself, caused the reboot. A
+held mode now leaves the socket waiter and lock gate alive while another thread
+performs immediate post-write work. Critical-window logging can be made
+stderr-only with `GHOSTLOCK_VOLATILE_LOG`, avoiding `O_SYNC` delays on the same
+ext4 filesystem used by the gate.
+
+87. The held boot-ID run proved the constrained kernel write. It redirected
+the boot-ID sysctl data pointer to the reclaimed-page candidate and returned
+`11000000-0000-0000-70ea-8a0291ffffff`, decoded as `q0=0x11` and
+`q1=0xffffff91028aea70`. The second word is the exact canonical write target
+stored by the RB unlink. The device rebooted only after the finite ext4
+truncate completed and released the legitimate waiter into the damaged tree.
+
+88. The first in-child ashmem FOPS checkpoint also completed the scheduler
+operation, then faulted in `try_module_get+0x2c` from `misc_open`; the fake
+table's owner argument was `0xc`. This explains the earlier boot-ID `q0=0x11`:
+the known slab address had not retained the sprayed file-operations payload.
+The large proc-lock gate was allocating page tables and VMAs after the target
+page reclaim and could reuse that page before the trigger.
+
+89. The proc-lock gate is now preallocated inside page preparation while the
+leaked `mm_struct` remains pinned. All page-preparation child processes already
+exist at that point. Only after the 64 GiB mapping and page tables are complete
+does the exploit free the order-2 target slab and spray it with the mixed
+order-2/order-3 socket payload. The FOPS checkpoint also uses canonical
+KASLR-adjusted addresses until it reads the real `memstart_addr` through the
+configfs primitive and configures direct-map translation.
+
+Current result: hardware echo cancellation remains enabled.
