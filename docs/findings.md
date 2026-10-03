@@ -739,3 +739,23 @@ the forged dequeue while keeping the helper as the top waiter, allowing the
 real owner and lock graph to provide the return path.
 
 Current result: hardware echo cancellation remains enabled.
+
+76. The first preserve-lock run reached the scheduler consumer despite its
+retained userspace trace ending at the owner-timeout checkpoint. Ramoops shows
+the expected stale waiter in x28, but waiter->lock in x20 was the userspace
+pointer 0x7da29e5000. Signal delivery and rt_sigreturn therefore overwrite the
+field before the partial sendmmsg copy; the real PI-mutex pointer cannot be
+preserved this way. The panic occurred in _raw_spin_trylock before rb_erase,
+so the boot-id pointer remained untouched.
+
+The next route uses a deterministic kernel-owned lock instead of either the
+overwritten real pointer or the reclaimed-page fake lock. The installed image
+exports msm_bus_dbg_cllist_lock at image offset 0x22504f8. It is a statically
+initialized rt_mutex in BSS and is used only by the optional MSM bus debug
+interface. Its direct-map alias supplies a valid unlocked wait_lock and empty
+waiter tree. The full sendmmsg copy points the forged waiter at this lock; an
+ownerless requeue wakes init_task, which is already runnable, and returns.
+This one-shot diagnostic dirties the debug lock's waiter tree and must be
+followed by reboot unless the resulting kernel-write primitive restores it.
+
+Current result: hardware echo cancellation remains enabled.

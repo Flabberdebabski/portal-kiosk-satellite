@@ -28,14 +28,15 @@ The retained trace from the boot-id proof showed that `sched_setattr` entered
 but did not return, while the boot ID remained unchanged. This confines the
 stall to acquisition of the reclaimed-page fake mutex before `rb_erase`.
 
-The active build avoids that dependency. It copies only the forged `rb_node`
-through `sendmmsg`, preserving the dangling waiter's legitimate PI-mutex
-pointer and all later waiter fields. A new priority-130 helper blocks on that
-same real mutex after the owner-chain timeout. It supplies a valid
-kernel-managed top waiter while the vulnerable task changes from priority 120
-to 139. The next boot-id proof therefore uses the real lock, real owner and
-real sentinel for the full return path; only the stale node's rb-tree links
-are forged. Once that checkpoint succeeds, the planned order is:
+Ramoops disproved the partial-copy route: signal return overwrote the stale
+waiter's lock field with a userspace pointer before `sendmmsg` ran. The active
+build instead points the complete forged waiter at the kernel's statically
+initialized `msm_bus_dbg_cllist_lock`. That idle BSS `rt_mutex` has a valid
+unlocked spinlock and does not depend on reclaimed-page contents. The
+ownerless return wakes `init_task`, which is already runnable. This dirties
+the debug lock's waiter tree, so a proof run must be followed by reboot and a
+live primitive must restore the lock immediately. Once that checkpoint
+succeeds, the planned order is:
 
 1. Verify arbitrary kernel read and write and restore `ashmem_misc.fops`.
 2. Dump the live `adbd` credential layout without modifying it.
