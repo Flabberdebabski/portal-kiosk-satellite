@@ -1,0 +1,27 @@
+# Build outputs
+exploit/build/*
+!exploit/build/.gitkeep
+exploit/portal-terry-*
+*.o
+*.so
+
+# Device and firmware artifacts
+artifacts/*
+!artifacts/README.md
+*.apk
+*.dex
+*.jar
+*.zip
+*.tar
+*.tar.gz
+*.img
+*.elf
+*.bin
+*.bugreport
+
+# Generated analysis
+*.disasm.txt
+*.symbols
+*.log
+__pycache__/
+*.pyc
