@@ -17,9 +17,19 @@ A full connected TCP send buffer then holds the calling thread in
 coherent copy. The equal-priority control reached that wchan, completed
 `sched_setattr` successfully, and returned without a crash.
 
-The next run uses the proven one-left-child graph to replace
-`ashmem_misc.fops` with the reclaimed fake table. Once the FOPS checkpoint
-succeeds, the planned order is:
+The equal-priority placement control is stable. The first live FOPS attempt
+also exposed a return-path constraint: after changing the task to priority
+121, the forged waiter became the fake lock's top waiter and triggered an
+unsafe wakeup. Keeping the existing priority-130 sentinel on top by changing
+the task to priority 139 avoids that branch, but the following live attempt
+lost shell service before its final trace could be retained.
+
+The active build logs immediately before and after the scheduler call and has
+a boot-id proof mode. It uses the same one-left-child graph to redirect the
+boot-id sysctl data pointer to the pinned fake table, then verifies the exact
+16-byte value through procfs. This proves the constrained write and its return
+path without changing `ashmem_misc.fops`. Once that checkpoint succeeds, the
+planned order is:
 
 1. Verify arbitrary kernel read and write and restore `ashmem_misc.fops`.
 2. Dump the live `adbd` credential layout without modifying it.

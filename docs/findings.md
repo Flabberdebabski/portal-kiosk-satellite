@@ -708,3 +708,18 @@ with ret=0, unblocked through receiver shutdown, and exited cleanly. This
 confirms deterministic placement and lifetime without a fault-window race.
 
 Current result: hardware echo cancellation remains enabled.
+
+74. The first live `ashmem_misc.fops` attempt used the default scheduler
+transition to nice 1. The forged waiter was reinserted at priority 121 ahead
+of the priority-130 sentinel, and the scheduler thread remained in kernel
+context at 100% CPU. This matches the ownerless return branch attempting to
+wake the new top waiter's forged task pointer. A second attempt changed the
+task to priority 139 so the sentinel would remain top, but the device stopped
+servicing shell requests and had to reboot before its final trace was
+captured. The next build adds entry/return logging around `sched_setattr` and
+a non-ashmem proof mode: the same constrained write redirects the boot-id
+sysctl data pointer to the pinned fake table, whose first 16 bytes can be read
+back through `/proc/sys/kernel/random/boot_id`. Output will be retained in a
+file across reboot.
+
+Current result: hardware echo cancellation remains enabled.
