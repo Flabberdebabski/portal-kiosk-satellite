@@ -1,277 +1,390 @@
-# Portal Go root and audio control research
+# Meta Portal Root and Provisioning for Kiosk Satellite
 
-This repository tracks the build-specific work to obtain temporary privileged execution on a Facebook Portal Go and disable its hardware echo cancellation at the system level.
+This project prepares abandoned Meta Portal devices for use with Kiosk
+Satellite. It provides a guarded, command-line provisioner for system changes
+that Android and Meta's firmware do not normally allow, including disabling
+hardware echo cancellation, making Kiosk Satellite the Device Owner, blocking
+firmware updates, removing unused Meta software and accounts, and reducing
+AIService CPU use without losing the Portal's LED-free presence detector.
 
-## Target
+Support is intentionally build-specific. One Portal Go firmware is currently
+supported; the repository is organized so more Portal models and firmware
+builds can be added as their kernel layouts and system services are verified.
 
-- Device: Facebook Portal Go, `terry`
-- Address during authorized testing: `192.168.1.72:5555`
-- Build: `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys`
-- Kernel: Linux `4.9.227-perf+`
-- Security state: locked bootloader, green Verified Boot and SELinux enforcing
+## How the root exploit works
 
-The microphone array is processed by the DBMD7/STAX voice DSP before Android receives audio. Meta's protected audio service exposes `AEC_ENABLE` as parameter `3001`, but ordinary apps and the ADB shell cannot call it. The root route adapts GhostLock, CVE-2026-43499, to this exact kernel build and invokes the private service from the temporary privileged process.
+The project adapts GhostLock, CVE-2026-43499, to a specific Portal kernel. The
+host provisioner confirms the device model and full firmware fingerprint,
+reboots into a clean state, derives the randomized kernel addresses for that
+boot, and starts the exploit through a staged native library. The exploit
+obtains temporary kernel read/write access, gives its own process root
+credentials, and performs only the selected provisioning actions.
 
-## Repository layout
+Afterward, the device reboots normally. SELinux returns to enforcing, and the
+exploit does not install `su`, a root shell, or a general root daemon. Features
+that must survive reboot use narrowly scoped configuration files or the native
+audio watchdog installed by the privileged process. The provisioner then
+checks the requested behavior on two distinct boots.
 
-- `exploit/`: Portal-specific GhostLock source and exact-build target constants
-- `helper/`: native boot-time audio watchdog and the earlier APK prototype
-- `analysis/`: offset extraction and kernel analysis helpers
-- `tools/provision_portal.py`: action-based provisioner and two-reboot verifier
-- `tools/PortalAudioCtl.java`: direct Binder client for Meta's private audio service
-- `tools/PortalAccountCtl.java`: local Meta account and identity-database cleanup
-- `docs/findings.md`: chronological investigation record
-- `artifacts/`: manifest for large local firmware, kernel and crash artifacts that are intentionally excluded from Git
+Kernel exploitation is race-sensitive. An unsuccessful attempt may reboot or
+temporarily freeze the Portal; the provisioner retries from a clean boot. The
+tool refuses to run its build-specific kernel writes if the model or firmware
+fingerprint does not match a supported target.
 
-## Build
+## Requirements
 
-Install Android NDK r28.2 at the path used by `exploit/Makefile` or pass `NDK` explicitly:
+### Host computer
+
+- A Linux x86_64 host on the same network as the Portal
+- Git, GNU Make, Python 3.9 or newer, and Android Debug Bridge (`adb`)
+- Android NDK r28.2 (`28.2.13676358`)
+- A Java Development Kit with `javac` and `jar`
+- Android SDK Platform 36 and an Android Build Tools installation containing
+  `d8` when using `--remove-meta-accounts`
+
+The Python provisioner uses only the standard library; there are no Python
+packages to install.
+
+### Portal
+
+- A model and exact firmware build listed under [Supported models](#supported-models)
+- Developer access with authorized wireless ADB on TCP port 5555
+- Wireless ADB configured to return after a normal reboot
+- A stable network connection and external power for several automatic reboots
+- Kiosk Satellite installed and configured
+- Kiosk Satellite's device-admin receiver enabled before using
+  `--device-owner`
+
+For `--optimize-presence`, keep a person in view when the Portal finishes each
+reboot. The verifier must observe the same `Notify people presence` log that
+Kiosk Satellite consumes.
+
+## Supported models
+
+| Model | Codename | Android | Supported firmware fingerprint | Kernel | Status |
+| --- | --- | --- | --- | --- | --- |
+| Meta Portal Go | `terry` | 10 | `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
+
+Other Portal models and other Portal Go firmware builds are not yet supported.
+Do not substitute target constants from a similar device. Kernel addresses and
+object layouts must be derived and verified for every exact build.
+
+## Step-by-step installation
+
+### 1. Install the host tools
+
+Install Git, Make, Python, ADB, a JDK, and the Android command-line tools using
+your Linux distribution and Android SDK manager. Install NDK version
+`28.2.13676358`, Android Platform 36, and a Build Tools version that provides
+`d8`.
+
+### 2. Clone the repository
 
 ```sh
-make -C exploit -B NDK=/path/to/android-ndk
+git clone https://github.com/jxlarrea/portal-root.git
+cd portal-root
 ```
 
-The output is `exploit/build/preload-portal-terry-5051355900018050.so`.
+The repository is private, so GitHub authentication must already be configured
+for the account that has access.
 
-Build the persistent native helper with:
+### 3. Configure the Android toolchain
+
+Point the build at the SDK installed on the host. Adjust the Build Tools
+version if the installed `d8` is in a different directory.
 
 ```sh
-make -C helper native
+export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
+export NDK="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
+export ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-36/android.jar"
+export D8="$ANDROID_SDK_ROOT/build-tools/37.0.0/d8"
 ```
 
-## Persistent audio disable
+The provisioner builds the files required by the selected actions. To check
+the core exploit build before touching a device, run:
 
-The installed solution loads `libportal_audio_persist.so` inside Meta's
-`com.facebook.portal.aiservice` process at every process start. Its watchdog
-uses the service's own Binder identity to keep these DSP parameters at zero:
+```sh
+make -C exploit -j2 all
+```
+
+### 4. Connect to the Portal
+
+Set the Portal's current IP address and connect over wireless ADB:
+
+```sh
+export PORTAL_IP=192.168.1.100  # replace with your Portal's address
+adb connect "$PORTAL_IP:5555"
+adb -s "$PORTAL_IP:5555" get-state
+```
+
+The final command must print `device`. Confirm the model and complete firmware
+fingerprint before continuing:
+
+```sh
+adb -s "$PORTAL_IP:5555" shell getprop ro.product.device
+adb -s "$PORTAL_IP:5555" shell getprop ro.build.fingerprint
+```
+
+Compare both values with the supported-model table. The provisioner performs
+the same check and stops before exploitation if either value differs.
+
+Before provisioning, reboot once and confirm that wireless ADB returns without
+changing the address or authorizing the host again:
+
+```sh
+adb -s "$PORTAL_IP:5555" reboot
+# Wait until the Portal finishes booting.
+adb connect "$PORTAL_IP:5555"
+adb -s "$PORTAL_IP:5555" get-state
+```
+
+The provisioner cannot continue through its verification reboots if ADB is
+only enabled for the current boot.
+
+### 5. Prepare Kiosk Satellite
+
+Install Kiosk Satellite and open it once. If Kiosk Satellite will become the
+Device Owner, enable its device-admin receiver through its setup flow first.
+You can inspect the loaded policy with:
+
+```sh
+adb -s "$PORTAL_IP:5555" shell dumpsys device_policy
+```
+
+The provisioner requires
+`me.jxl.kiosk_satellite/.KioskAdminReceiver` to appear as an enabled admin and
+refuses to replace an existing Device Owner belonging to another application.
+
+### 6. Run the provisioner
+
+For a dedicated Kiosk Satellite Portal using every currently supported
+customization, keep a person in front of the device and run:
+
+```sh
+python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
+  --audio \
+  --device-owner \
+  --disable-updates \
+  --debloat \
+  --remove-meta-accounts \
+  --optimize-presence
+```
+
+The Portal will reboot several times. Leave it powered and do not close the
+terminal. A completed run ends with `PROVISION_OK` and two different boot IDs.
+Attempt logs are saved under a timestamped directory in `/tmp`; use
+`--log-dir PATH` to choose another location.
+
+Every action is optional. Select only the flags needed for a particular
+device. The sections below explain each action, its prerequisites, and its
+available rollback.
+
+## Provisioning actions
+
+| Action | Flag | Uses root | Automated rollback |
+| --- | --- | --- | --- |
+| Disable hardware audio processing | `--audio` | Yes | No |
+| Make Kiosk Satellite Device Owner | `--device-owner` | Yes, on first setup | No |
+| Disable automatic firmware updates | `--disable-updates` | Yes | No |
+| Disable unused Meta applications | `--debloat` | No | `--restore-bloat` |
+| Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
+| Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
+
+Flags can be combined in one command. Combining privileged actions performs
+them during the same successful exploit run and verifies all requested states
+after reboot. For clarity, use explicit action flags: running the provisioner
+without one retains its legacy behavior and is equivalent to selecting
+`--audio`.
+
+### 1. Disable hardware echo cancellation and noise suppression
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --audio
+```
+
+The Portal's microphone array passes through a DBMD7/STAX voice DSP before
+Android receives it. This action installs a native watchdog inside Meta's
+AIService and keeps these private DSP parameters at zero:
 
 - `AEC_ENABLE` (`3001`)
 - `NS_MODE` (`4001`), including residual-echo suppression
 
-Run the provisioner from a host with wireless ADB already connected. With no
-action flag it retains the original behavior and provisions audio; `--audio`
-selects it explicitly when combining actions:
+The change is system-wide, so every Android application receives audio without
+those two processing stages. The watchdog reapplies the values after AIService
+starts and repairs later firmware-side changes. The provisioner confirms both
+readbacks on two boots. There is currently no provisioner flag to uninstall
+the audio watchdog.
 
-```sh
-python3 tools/provision_portal.py --serial 192.168.1.72:5555 --audio
-```
-
-The provisioner refuses any fingerprint other than the supported build, stages
-fresh binaries, derives that boot's randomized kernel addresses, retries the
-GhostLock reclaim if needed, and verifies the watchdog across two distinct
-reboots. Attempt logs are written to a timestamped directory under `/tmp`.
-
-To provision the already-active Kiosk Satellite admin as Android's Device
-Owner at the same time, add `--device-owner`:
+### 2. Make Kiosk Satellite the Device Owner
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --audio --device-owner
+  --serial "$PORTAL_IP:5555" --device-owner
 ```
 
-Android's normal `dpm set-device-owner` command rejects this Portal because it
-already has Meta accounts. The privileged action instead installs the Android
-10 owner record only after confirming that
-`me.jxl.kiosk_satellite/.KioskAdminReceiver` is an active admin and that no
-other owner record exists. It snapshots the original policy under
-`/data/local/tmp/portal-device-owner-backup`, preserves the system policy
-file's ownership and SELinux label, and commits the owner file with `fsync`
-and an atomic rename. The provisioner then requires DevicePolicyManager to report
-Kiosk Satellite as owner of user 0 and `ro.device_owner=true` after two
-distinct boots. A later run recognizes the existing owner and exits without
-rewriting it or invoking the exploit.
+This gives Kiosk Satellite Android's Device Owner role for user 0. Device Owner
+allows the kiosk to apply stronger device policies than an ordinary device
+admin. Kiosk Satellite must already be installed and its
+`KioskAdminReceiver` must already be active.
 
-The persistent files are placed in the AI service's private
-`lib-compressed` directory. `libcoldstart_1.so` has its `libdl.so` dependency
-slot changed to the equal-length name `libpa.so`; the original is retained as
-`libcoldstart_1.portal-original.so`. The helper keeps `libdl.so` as a normal
-dependency, so the original cold-start library still resolves its symbols.
+Meta accounts normally cause Android's `dpm set-device-owner` command to reject
+the operation. The privileged installer writes the Android 10 owner record
+only after checking that no other Device Owner exists. It saves the original
+policy state under `/data/local/tmp/portal-device-owner-backup` and verifies
+both DevicePolicyManager and `ro.device_owner=true` after reboot. There is no
+automated Device Owner removal action in the provisioner.
 
-## Persistent OTA disable
-
-The same provisioner can disable Meta's automatic firmware-update path:
+### 3. Disable automatic Meta firmware updates
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --disable-updates
+  --serial "$PORTAL_IP:5555" --disable-updates
 ```
 
-This disables `com.facebook.aloha.otaui` and
-`com.facebook.aloha.alohaotasetup` for user 0 and atomically installs a local
-MobileConfig override for
-`sessionless_aloha_ota_daemon:firmware_ota_update_enable=false`. The override
-file is owned by the original MobileConfig app UID, retains the app-data
-SELinux label, and is loaded after server configuration. The installer refuses
-to replace an unrelated existing override file. It records an absent-file
-marker under `/data/local/tmp/portal-ota-backup`, then requires both the native
-daemon's false gate and Meta's `source: OVERRIDE` log on two fresh boots.
+This disables Meta's two OTA user-interface packages and installs a local
+MobileConfig override setting `firmware_ota_update_enable=false`. Shared update
+infrastructure remains installed, but the native OTA daemon stays idle and
+does not discover or install firmware.
 
-The native `otad` and Android `update_engine` processes still exist because
-both are shared system infrastructure. With the firmware-update gate pinned
-false, `otad` remains idle and does not discover or install a package.
+The provisioner verifies the disabled packages and requires Meta's own service
+to report the value from the local override on two boots. It refuses to replace
+an unrelated existing override. The original file state is recorded under
+`/data/local/tmp/portal-ota-backup`. There is currently no automated restore
+flag for the OTA configuration.
 
-## Reversible debloat profile
-
-The conservative debloat profile disables six user-facing or telemetry
-packages while retaining the Portal camera, audio, identity, presence, media,
-app-management and WebView services:
-
-- `com.facebook.aloha.analytics`
-- `com.facebook.aloha.app.messenger`
-- `com.facebook.aloha.app.whatsapp`
-- `com.facebook.aloha.app.portalfeed`
-- `com.facebook.alohaapps.superframe`
-- `com.facebook.alohaapps.contacts`
-
-Apply it with:
+### 4. Disable unused Meta applications
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --debloat
+  --serial "$PORTAL_IP:5555" --debloat
 ```
 
-This operation uses Android's per-user package state and does not launch the
-kernel exploit. Before changing anything, it records whether every package was
-enabled, disabled, or absent in
-`/data/local/tmp/portal-debloat-backup-v1.tsv`. It then verifies the disabled
-set, both cameras, AI service, Home activity and WebView provider across two
-reboots. Restore exactly those saved package states with:
+The conservative debloat profile disables these packages for user 0:
+
+- Meta Analytics
+- Messenger
+- WhatsApp
+- Portal Feed
+- Superframe
+- Meta Contacts
+
+It retains the camera, audio, identity, presence, media, app-management, and
+WebView services needed by the Portal and Kiosk Satellite. This action uses
+normal Android package controls and does not need the kernel exploit when run
+by itself.
+
+Before changing package state, the provisioner saves the exact enabled,
+disabled, or absent state of every package in
+`/data/local/tmp/portal-debloat-backup-v1.tsv`. Restore those saved states with:
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --restore-bloat
+  --serial "$PORTAL_IP:5555" --restore-bloat
 ```
 
-Action flags are independent. For a fresh device that needs every supported
-customization, combine them in one run:
+Both commands verify the retained camera, AIService, Kiosk Home, and WebView
+paths across two reboots.
+
+### 5. Remove local Meta accounts
 
 ```sh
-python3 tools/provision_portal.py --serial 192.168.1.72:5555 \
-  --audio --device-owner --disable-updates --debloat --remove-meta-accounts \
-  --optimize-presence
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --remove-meta-accounts
 ```
 
-## Presence-preserving AI optimization
+This removes the Portal-specific proxy SSO, platform-login, hardware, and
+private-owner accounts from Android AccountManager and Meta's local identity
+databases. It then disables only their four authenticator components so the
+firmware cannot immediately recreate the accounts. The shared `alohausers`
+package stays enabled because camera support, MobileConfig, and other Portal
+services still use it.
 
-Kiosk Satellite uses AIService's `Notify people presence` log as the Portal's
-LED-free presence signal. The optional presence profile keeps that detector,
-the AIService camera client, tracking, and pose estimation running while it
-turns off four downstream Smart Camera workloads:
+The original account type and name inventory is saved at
+`/data/local/tmp/portal-meta-accounts-before-v1.tsv` and copied into the host
+log directory. Tokens and full database contents are not backed up, so this
+action has no automated restore. Repeated runs are safe: once the accounts are
+gone and the authenticators are disabled, the tool only verifies the state.
+
+### 6. Reduce AIService CPU use while preserving presence detection
+
+Keep a person in view during the verification boots, then run:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --optimize-presence
+```
+
+Kiosk Satellite reads AIService's `Notify people presence` log to use the
+Portal's person detector without activating an application camera and its
+on-screen camera LED. This profile keeps that detector, AIService's camera
+client, tracking, and pose estimation active while disabling four downstream
+Smart Camera workloads:
 
 - background segmentation
 - liveness scoring
 - color-based re-identification
 - face-recognition-based re-identification
 
-Apply the profile while somebody is in front of the Portal so the live
-verifier can observe a new presence heartbeat:
+The provisioner requires an active AIService camera client, an allowed CAMERA
+AppOp, all four settings loaded as false, and the exact presence log on every
+verification boot. On the tested Portal Go, matched samples reduced average
+AIService CPU use from 47.8% to 22.1% of one core while the presence signal
+continued to work.
+
+The original settings-file state is stored under
+`/data/local/tmp/portal-presence-backup`. Restore it with:
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --optimize-presence
+  --serial "$PORTAL_IP:5555" --restore-presence-profile
 ```
 
-The privileged installer atomically writes AIService's private
-`settings_config.xml` with the app's UID, GID, and SELinux label. If a settings
-file already exists and was not created by this project, the installer saves
-it and refuses to replace it. Otherwise it records that the file was absent
-under `/data/local/tmp/portal-presence-backup`. Every verification boot
-requires AIService to own an active camera client, retain the CAMERA AppOp,
-load all four values as false, and emit the exact presence log Kiosk Satellite
-consumes.
+The installer and restore action use atomic file replacement, preserve the
+app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
 
-Restore the saved file, or remove the project-owned file when none existed,
-with:
+## Running and troubleshooting
+
+The default maximum is 12 exploit attempts. Change it with `--attempts N`,
+where `N` is between 1 and 100. A failed race normally causes a clean reboot
+and another attempt. If the Portal remains unresponsive, power-cycle it, wait
+for wireless ADB to return, and rerun the same command; completed provisioning
+actions are designed to be repeatable.
+
+Use `--skip-build` only when the required outputs have already been built and
+have not changed. Display every available option with:
 
 ```sh
-python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --restore-presence-profile
+python3 tools/provision_portal.py --help
 ```
 
-On the tested Portal, six equal-length samples averaged 47.8% of one CPU core
-before the profile and 22.1% afterward. The background-detector thread alone
-had averaged 11.6%; after the change, its worker and the liveness worker were
-absent. These measurements are workload samples rather than a benchmark, but
-the same exact presence heartbeat passed on two clean boots.
+Each successful run verifies the requested state on two distinct boots. Read
+the final `PROVISION_OK` line and keep the attempt directory when diagnosing a
+failure.
 
-## Remove Meta accounts
+## Repository layout
 
-The account-removal action clears the four Portal-specific Android account
-types and prevents the firmware from creating them again:
+- `exploit/`: GhostLock source, privileged provisioning actions, and
+  exact-build target definitions
+- `helper/`: persistent native audio watchdog and the earlier helper APK
+- `tools/provision_portal.py`: user-facing build, installation, retry, and
+  two-reboot verification tool
+- `tools/PortalAccountCtl.java`: privileged local-account cleanup helper
+- `analysis/`: kernel offset extraction and device-analysis utilities
+- `docs/current-status.md`: current implementation and validation details
+- `docs/findings.md`: chronological reverse-engineering and test record
+- `artifacts/`: manifest for large local firmware and crash artifacts excluded
+  from Git
 
-```sh
-python3 tools/provision_portal.py \
-  --serial 192.168.1.72:5555 --remove-meta-accounts
-```
+## Development status
 
-The privileged action removes the AccountManager records and the matching
-rows in Meta's two local identity databases. It then disables only the four
-authenticator service components in
-`com.facebook.alohaservices.alohausers`. The package itself stays enabled so
-MobileConfig, the OTA override, camera support, and other shared Portal
-services continue to work.
+The supported Portal Go configuration has been tested with SELinux enforcing
+after reboot. Hardware AEC and residual-echo suppression stay disabled,
+Kiosk Satellite loads as Device Owner, the OTA gate remains false, the
+conservative debloat set and Meta-account removal persist, and AIService keeps
+emitting the presence log with the reduced workload.
 
-Before the first change, the provisioner records the account type/name
-inventory in `/data/local/tmp/portal-meta-accounts-before-v1.tsv` and copies
-it into the host log directory. This inventory does not contain tokens or a
-full database backup, so it is evidence of the former identities rather than
-an automatic restore point. The provisioner treats a later run as idempotent
-when no target accounts remain and all four authenticators are disabled. It
-still verifies that state, the retained package, both cameras, AI Service,
-Home, and WebView on two new boots.
-
-## Current state
-
-The exact installed kernel is vulnerable. The exploit now reclaims the correct order-3 `mm_struct` slab, obtains arbitrary kernel read/write, patches its own credentials to UID 0 with full capabilities, and sets SELinux permissive. On October 3, 2026, it successfully set `AEC_ENABLE` (parameter `3001`) and `NS_MODE` (parameter `4001`) to `0.0`, with both values confirmed by readback. This disables hardware AEC and the separate residual-echo suppression mode for the active audio-service lifetime.
-
-The privileged action can also persist `persist.adb.tcp.port=5555` in Android's property store. A normal Android reboot restored wireless ADB automatically without a host-side `adb tcpip` command.
-
-On October 4, 2026, the hardened native watchdog was installed and verified on
-two successive cold service starts with boot IDs
-`30d9a2c6-9bd2-4ec7-bd6c-88ccf915f266` and
-`72d69b44-bd45-4ba6-8494-da4515f396ee`. On both boots it read back parameters
-3001 and 4001 as `0`. On the second boot Meta reset NS mode to `5`; the
-watchdog detected the change and restored it to `0` on its next pass. It checks
-once per second during startup and for 30 clean passes after any correction,
-then every five seconds in steady state. This demonstrates both boot
-persistence and repair of later service-side rewrites.
-
-On October 4, 2026, Kiosk Satellite version `2026.10.6` was also provisioned
-as Device Owner for user 0. Android loaded it as
-`ComponentInfo{me.jxl.kiosk_satellite/me.jxl.kiosk_satellite.KioskAdminReceiver}`
-and set `ro.device_owner=true`. That state survived normal reboots with boot
-IDs `31327449-dca9-47ab-919c-8608945b6eb1` and
-`73b06f93-35bc-47f5-bb99-ff324ca27c7e`.
-
-On October 4, 2026, automatic firmware updates were disabled and verified
-after normal reboot to boot ID `5757afe1-3d74-46f9-a245-10239d30571e`.
-`dumpsys facebook.aloha.otaservice` reported idle state, no downloaded JSON
-manifest, and `kFirmwareOtaUpdateEnable=false`; Meta's MobileConfig client
-reported the exact parameter value as `source: OVERRIDE`. Both OTA packages
-remained disabled. Device Owner, persistent wireless ADB, and the audio
-watchdog all passed on the same boot.
-
-On October 4, 2026, the conservative debloat profile was applied and survived
-two clean boots with IDs `c43f3691-0874-445b-bf85-1e55907194dc` and
-`401c4711-17d7-4990-bfbe-544243306f25`. None of the six disabled app processes
-remained running. Both cameras, AI Service, Kiosk Satellite Home, Portal
-WebView, Device Owner, wireless ADB, the OTA block, and the audio watchdog
-remained healthy.
-
-On October 4, 2026, all four Portal-specific Meta accounts were removed and
-their four authenticator components were disabled. The shared `alohausers`
-package remained enabled. Verification boots
-`8db565c4-f7c2-40dc-9df5-aba6b4a98390` and
-`8762d7c6-1db1-400f-9559-8df8dc9f5f33` both reported zero target accounts,
-two camera devices, a running AI service, Kiosk Satellite Home, and the Portal
-WebView provider. SELinux returned to enforcing after the exploit boot.
-
-On October 4, 2026, the presence-preserving AI profile was installed and
-verified on clean boot IDs `64e187d4-1999-4152-83ba-f66d763dcf86` and
-`57488e98-61b0-45be-9128-4447503e8c1e`. AIService loaded all four disabled
-workload settings, retained its active camera client and CAMERA permission,
-and emitted `Notify people presence` on both boots. Sampled AIService CPU fell
-from 47.8% to 22.1% of one core while Kiosk Satellite's log-based presence
-source remained available.
-
-This code is tied to the fingerprint and kernel listed above. A mismatch can panic the device.
+See [the current status](docs/current-status.md) for implementation evidence
+and [the investigation log](docs/findings.md) for the complete research
+history. This project currently has no generic exploit path for unlisted Portal
+models or firmware builds.
