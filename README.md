@@ -59,9 +59,6 @@ Meta's firmware do not normally allow.
 - **[Exact model and firmware safeguards](#supported-models):** matches both
   the device codename and complete firmware fingerprint before any kernel
   write, preventing offsets for one Portal build from being used on another.
-- **[Manual Kiosk Satellite installation](#5-prepare-kiosk-satellite):** leaves
-  APK selection and upgrades under the user's control instead of downloading
-  or replacing Kiosk Satellite automatically.
 - **[Automatic retry and two-boot verification](#running-and-troubleshooting):**
   retries race-sensitive exploit attempts from clean boots and accepts changes
   only after their requested behavior passes on two distinct normal boots.
@@ -143,9 +140,6 @@ your Linux distribution and Android SDK manager. Install NDK version
 git clone https://github.com/jxlarrea/portal-root.git
 cd portal-root
 ```
-
-The repository is private, so GitHub authentication must already be configured
-for the account that has access.
 
 ### 3. Configure the Android toolchain
 
