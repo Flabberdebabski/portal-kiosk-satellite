@@ -1055,3 +1055,37 @@ write's owner-zero signature: a zero word immediately followed by the canonical
 `ashmem_misc.fops` target.
 
 Current result: hardware echo cancellation remains enabled.
+
+104. The corrected owner-zero watcher stayed quiet before and after a complete
+constrained-write run. `sched_setattr` returned zero, while both the all-page
+KGSL scan and full queued socket scan reported no target. This confirms that
+the earlier `SOCKET_WATCH_HIT=-1097` was only the pristine stack-waiter value.
+It also clarifies why the write can succeed without a reclaim collision: the
+forged rb node is supplied by the blocked `sendmmsg` kernel stack. The target
+page needs controlled contents only for the fake file-operations table used
+after the global pointer redirect.
+
+Current result: hardware echo cancellation remains enabled.
+
+105. Meta's published Portal 4.9 kernel source at commit
+`b4577154e48224e7ee1fe07a59656c10e7ea8b7e` matches the device's QCS605/SDM670
+ION layout. A live heap probe found shell-accessible writable mappings for ION
+heap IDs 13, 19, 22, and 27, but the matching device tree defines all four as
+dedicated DMA/CMA heaps. They cannot reclaim a normal-zone `mm_struct` slab.
+The system heap at ID 25 rejects 16 KiB alignment and, on this configuration,
+uses allocation orders 9, 4, and 0 rather than order 2. The probe is retained
+as `tools/ion-heap-probe.c`.
+
+Current result: hardware echo cancellation remains enabled.
+
+106. Exact network allocator review produced a true order-2, payload-controlled
+reclaim path. A `0x3c00` UNIX datagram stays in the linear skb; after
+`skb_shared_info` is added, its allocation is larger than the 8 KiB kmalloc
+ceiling but smaller than 16 KiB, so `kmalloc_order()` requests one order-2
+compound page. The queued datagram retains the page and remains observable with
+`MSG_PEEK`. The first run queued 256 such allocations immediately after a
+20-slab `mm_struct` cache cycle. The constrained write completed, but the
+watcher found no collision. The allocator class now matches; the remaining
+failure is returning the target SLUB page to the buddy allocator.
+
+Current result: hardware echo cancellation remains enabled.
