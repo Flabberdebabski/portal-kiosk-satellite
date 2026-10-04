@@ -967,3 +967,15 @@ making another syscall, and reports the matching mapping as `kgsl_hit` in the
 scheduler return line.
 
 Current result: hardware echo cancellation remains enabled.
+
+96. The first same-thread fast-scan run rebooted after the owner-chain timeout
+without emitting the scheduler return line. The constrained operation and the
+legitimate waiter can resume on different CPUs when the ext4 gate releases, so
+even code placed immediately after `sched_setattr` is not guaranteed to execute
+before the waiter panics. An optional KGSL watcher is now pinned to a spare CPU
+and continuously scans the already populated mappings while the consumer is
+blocked in the kernel. It performs no syscall after affinity setup until it
+observes the write, then emits a minimal `KGSL_WATCH_HIT` marker directly to
+stderr.
+
+Current result: hardware echo cancellation remains enabled.

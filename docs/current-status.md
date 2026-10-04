@@ -44,6 +44,14 @@ before any syscall, log operation, or cross-thread wakeup. Its return line
 includes `kgsl_hit`: positive identifies an owner-zero fake table, negative a
 matching table with a nonzero owner, and zero no observed collision.
 
+The first run with that fast scan rebooted after the owner-chain timeout but
+before the consumer emitted its return line. A new watcher therefore scans the
+same mappings continuously on a spare CPU while `sched_setattr` remains blocked
+in the kernel. On observing the constrained write it sends a minimal
+`KGSL_WATCH_HIT` marker to the existing ADB stderr stream. This avoids relying
+on the consumer returning to userspace before the concurrently awakened real
+waiter traverses the damaged tree.
+
 After that checkpoint, the remaining sequence is:
 
 1. Complete the held KGSL collision verification on the next responsive boot.
