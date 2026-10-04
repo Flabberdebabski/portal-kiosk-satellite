@@ -680,18 +680,6 @@ failure.
 - `artifacts/`: manifest for large local firmware and crash artifacts excluded
   from Git
 
-## Development status
-
-The supported Portal Go configuration has been tested with SELinux enforcing
-after reboot. Hardware AEC and residual-echo suppression stay disabled,
-Kiosk Satellite loads as Device Owner, the OTA gate remains false, the
-conservative debloat set and Meta-account removal persist, and AIService keeps
-emitting the presence log with the reduced workload.
-
-See [the current status](docs/current-status.md) for implementation evidence
-and [the investigation log](docs/findings.md) for the complete research
-history. This project currently has no generic exploit path for unlisted Portal
-models or firmware builds.
 
 ## Support the project
 
