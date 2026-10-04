@@ -1,3 +1,15 @@
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/banners/ks_banner_dark.svg" />
+    <source media="(prefers-color-scheme: light)" srcset="assets/banners/ks_banner_light.svg" />
+    <img alt="Kiosk Satellite for Home Assistant" src="assets/banners/ks_banner_default.svg" width="650" />
+  </picture>
+</h1>
+
+<p align="center">
+<a href="https://buymeacoffee.com/jxlarrea"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
+</p>
+
 # Meta Portal Root and Provisioning for Kiosk Satellite
 
 This project prepares abandoned Meta Portal devices for use with
