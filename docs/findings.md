@@ -979,3 +979,12 @@ observes the write, then emits a minimal `KGSL_WATCH_HIT` marker directly to
 stderr.
 
 Current result: hardware echo cancellation remains enabled.
+
+97. Exact KGSL source review identified why the first watcher run died before
+the owner timeout: `kgsl_page_alloc_ops.vmflags` includes `VM_DONTCOPY`, so
+the GPU mappings are absent in the forked route child. The watcher now starts
+in the pre-fork parent that owns those mappings and remains alive in `waitpid`
+for the entire trigger. When parent watching is enabled, the child also skips
+its post-`sched_setattr` KGSL scan so it cannot fault on a non-inherited VMA.
+
+Current result: hardware echo cancellation remains enabled.

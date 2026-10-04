@@ -45,12 +45,13 @@ includes `kgsl_hit`: positive identifies an owner-zero fake table, negative a
 matching table with a nonzero owner, and zero no observed collision.
 
 The first run with that fast scan rebooted after the owner-chain timeout but
-before the consumer emitted its return line. A new watcher therefore scans the
-same mappings continuously on a spare CPU while `sched_setattr` remains blocked
-in the kernel. On observing the constrained write it sends a minimal
-`KGSL_WATCH_HIT` marker to the existing ADB stderr stream. This avoids relying
-on the consumer returning to userspace before the concurrently awakened real
-waiter traverses the damaged tree.
+before the consumer emitted its return line. Exact KGSL source then showed its
+page-allocation VMAs use `VM_DONTCOPY`; a watcher created in the forked child
+therefore faulted before the next attempt reached the timeout. The watcher now
+runs in the pre-fork parent, which owns the KGSL mappings and remains alive in
+`waitpid` throughout the trigger. It scans on a spare CPU while `sched_setattr`
+is blocked and emits a minimal `KGSL_WATCH_HIT` marker on observing the write.
+The child skips its mapping scan in this mode.
 
 After that checkpoint, the remaining sequence is:
 
