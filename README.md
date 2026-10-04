@@ -133,6 +133,49 @@ Other Portal models and other Portal Go firmware builds are not yet supported.
 Do not substitute target constants from a similar device. Kernel addresses and
 object layouts must be derived and verified for every exact build.
 
+## Possible supported devices
+
+The following models appear to be candidates for future support. This table is
+based on Meta's published kernel source and archived Portal firmware images; it
+does not mean that the current exploit can run on these devices. Every device
+and complete firmware fingerprint needs a separately generated and tested
+target before the provisioner will accept it.
+
+| Model | Codename or firmware family | Android | Published kernel | Porting outlook |
+| --- | --- | --- | --- | --- |
+| Meta Portal 10-inch, 2nd generation | `omni` | 10 | `4.9.227-perf+` | Strong candidate. It uses the same Qualcomm QCS605 and kernel family as the tested Portal Go. |
+| Meta Portal Mini | `atlas`, using the `omni` firmware family | 10 | `4.9.227-perf+` | Strong candidate. It is expected to share most of the `omni` port, with its exact identity and firmware still checked separately. |
+| Meta Portal+ 14-inch (2021) | `cipher` | 10 | `4.9.227-perf+` | Strong candidate. Its published kernel closely matches the `terry` and `omni` kernels. |
+| Original Meta Portal 10-inch | `aloha` | 9 | `4.4.153+` | Possible, but it needs a Linux 4.4-specific port and on-device validation. |
+| Original Meta Portal+ 15.6-inch | `ohana`, sharing the `aloha` firmware family | 9 | `4.4.153+` | Possible through the `aloha` family, but it needs the Linux 4.4 port and model validation. |
+| Meta Portal TV | `ripley` | 9 | `4.4.153+` | Possible, but it needs the Linux 4.4 port plus TV-specific provisioning and validation. |
+
+The archived kernels for these families contain the PI-futex and real-time
+mutex paths involved in GhostLock, along with the ashmem, procfs, and configfs
+components used by this exploit chain. The Android 10 devices are the best
+initial candidates because their 4.9 kernels are closest to the working
+`terry` target. The Android 9 devices use different kernel structures,
+allocator behavior, and stack layouts, so supporting them is a larger port.
+
+Useful references are Meta's published
+[Portal 4.4 kernel](https://github.com/facebookincubator/Portal-Kernel/tree/portal-msm-4.4-kernel-master),
+[Portal 4.9 kernel](https://github.com/facebookincubator/Portal-Kernel/tree/portal-msm-4.9-kernel-master),
+the [archived Portal firmware families](https://dumps.tadiphone.dev/dumps/facebook),
+and the [GhostLock security bulletin](https://access.redhat.com/security/vulnerabilities/RHSB-2026-010).
+
+To help add a model, connect to it with ADB and collect its identity without
+running the exploit:
+
+```sh
+adb shell getprop ro.product.model
+adb shell getprop ro.product.device
+adb shell getprop ro.build.fingerprint
+adb shell uname -a
+```
+
+Open an issue with this output and identify the retail model. Do not publish a
+private ADB address, pairing code, or any account information.
+
 ## Step-by-step installation
 
 ### 1. Install the host tools
