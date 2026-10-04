@@ -1435,3 +1435,38 @@ Current result: `--optimize-presence` installation and its two-reboot
 verification are fully unattended. The optimized profile remains durable,
 and each reboot proves that the camera-to-world-model path is processing live
 frames before the provisioner accepts the result.
+
+139. Evaluated a persistent `su` or root-command binary callable from ADB.
+`/data` is mounted `nosuid`, so both setuid mode bits and file capabilities are
+ignored there. The ADB shell starts as UID 2000 with no effective or permitted
+capabilities and a bounding set of only `0xc0`. Meta's `adbd` recognizes the
+standard `service.adb.root` property, but this production build has
+`ro.secure=1` and `ro.debuggable=0`, so the property cannot enable root. The
+installed CVE-2024-31317 fix also rules out using the Zygote settings injection
+as an on-demand elevation path.
+
+140. Checked the device's system and vendor init files for an executable or
+import hook under `/data`; none exists. `/system` and `/vendor` are read-only
+dm-verity mappings covered by a locked, green AVB chain. The build has no
+remount utility or active persistent overlay, and its fs-manager library marks
+the vendor overlay route unsupported. A patched `adbd`, init service, or boot
+image therefore cannot be installed through the existing data-only
+provisioning path.
+
+141. GhostLock already changes the live `adbd` credentials to UID 0 with full
+capabilities and a kernel SELinux SID while its privileged actions run. That
+state lasts only for the current boot. The exploit's reclaim route
+intentionally disturbs the `proc_uid` lock, which can panic the device when a
+later legitimate waiter uses it; the provisioner reboots immediately after
+the requested action for this reason. Leaving the patched daemon available as
+an interactive root shell, or automatically rerunning this race after every
+boot, would turn a bounded provisioning operation into an unstable persistent
+service.
+
+Current result: the supported exploit can safely perform explicit root actions
+and make their resulting configuration durable, but it cannot safely provide
+a device-local root shell that survives reboot. A true persistent ADB root
+service requires a separately verified early-boot execution hook or a way to
+modify the AVB-protected boot chain. A host-side service could rerun GhostLock
+after every reboot, but would inherit the exploit's freeze/panic risk and is
+not treated as a supported persistence mechanism.
