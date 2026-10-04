@@ -57,6 +57,10 @@ The reclaim sequence had allocated all KGSL pages before the later marker
 close that drains a frozen CPU-partial slab. It now uses an early batch after
 the target close and performs the remaining KGSL allocations immediately
 after that drain, covering both ways the target slab can reach buddy.
+KGSL assembles these 16 KiB buffers from 8 KiB allocation chunks on this
+driver family. The watcher therefore checks the constrained word's in-page
+offset in all four virtual page slots, so a split or rearranged target page is
+observable even when it cannot yet hold the complete fake object graph.
 
 After that checkpoint, the remaining sequence is:
 

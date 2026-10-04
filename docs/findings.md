@@ -999,3 +999,14 @@ an early batch follows the target close, and the remaining allocations run
 immediately after the marker drain, before socket allocation or logging.
 
 Current result: hardware echo cancellation remains enabled.
+
+99. KGSL's page-size selector on this driver family does not provide a 16 KiB
+class: a 16 KiB user buffer is normally assembled from 8 KiB order-1 chunks.
+The fixed-offset watcher could therefore miss the constrained word if buddy
+split the target order-2 page and KGSL mapped its second physical page at a
+different virtual slot. The fast watcher now checks eight bytes into every
+4 KiB slot in every mapping. Its nonzero result encodes
+`mapping_index * 4 + page_slot + 1`, with the sign still indicating whether
+the preceding owner word is zero.
+
+Current result: hardware echo cancellation remains enabled.
