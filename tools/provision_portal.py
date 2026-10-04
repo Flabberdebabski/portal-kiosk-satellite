@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and verify persistent Portal Go system customizations."""
+"""Provision and verify persistent Portal Go system customizations."""
 
 from __future__ import annotations
 
@@ -32,26 +32,44 @@ KIOSK_OWNER_COMPONENTS = (
     "admin=ComponentInfo{me.jxl.kiosk_satellite/"
     "me.jxl.kiosk_satellite.KioskAdminReceiver}",
 )
+DEBLOAT_BACKUP_REMOTE = "/data/local/tmp/portal-debloat-backup-v1.tsv"
+PACKAGE_STATE_SETTLE_SECONDS = 15
+DEBLOAT_PACKAGES = (
+    "com.facebook.aloha.analytics",
+    "com.facebook.aloha.app.messenger",
+    "com.facebook.aloha.app.whatsapp",
+    "com.facebook.aloha.app.portalfeed",
+    "com.facebook.alohaapps.superframe",
+    "com.facebook.alohaapps.contacts",
+)
 
 
-class InstallError(RuntimeError):
+class ProvisionError(RuntimeError):
     pass
 
 
-class PortalInstaller:
+class PortalProvisioner:
     def __init__(
         self,
         serial: str,
         attempts: int,
         log_dir: pathlib.Path,
+        audio: bool = False,
         device_owner: bool = False,
         disable_updates: bool = False,
+        debloat: bool = False,
+        restore_bloat: bool = False,
+        skip_build: bool = False,
     ):
         self.serial = serial
         self.attempts = attempts
         self.log_dir = log_dir
+        self.audio = audio
         self.device_owner = device_owner
         self.disable_updates = disable_updates
+        self.debloat = debloat
+        self.restore_bloat = restore_bloat
+        self.skip_build = skip_build
         self.adb = ["adb", "-s", serial]
 
     @staticmethod
@@ -68,9 +86,9 @@ class PortalInstaller:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            raise InstallError(f"command timed out: {shlex.join(args)}") from exc
+            raise ProvisionError(f"command timed out: {shlex.join(args)}") from exc
         if check and result.returncode != 0:
-            raise InstallError(
+            raise ProvisionError(
                 f"command failed ({result.returncode}): {shlex.join(args)}\n"
                 f"{result.stdout[-2000:]}"
             )
@@ -103,10 +121,10 @@ class PortalInstaller:
                 )
                 if state.returncode == 0 and completed.stdout.strip() == "1":
                     return
-            except InstallError:
+            except ProvisionError:
                 pass
             time.sleep(3)
-        raise InstallError(f"{self.serial} did not reconnect after {wait_seconds}s")
+        raise ProvisionError(f"{self.serial} did not reconnect after {wait_seconds}s")
 
     def reboot(self) -> tuple[str, str]:
         before = self.adb_run(
@@ -116,7 +134,7 @@ class PortalInstaller:
         ).stdout.strip()
         try:
             self.adb_run(["reboot"], timeout=8)
-        except InstallError:
+        except ProvisionError:
             # adbd can disappear before acknowledging a successful reboot.
             pass
         after = self.connect_after_reboot(before)
@@ -154,10 +172,10 @@ class PortalInstaller:
                     and last_boot_id != before
                 ):
                     return last_boot_id
-            except InstallError:
+            except ProvisionError:
                 pass
             time.sleep(3)
-        raise InstallError(
+        raise ProvisionError(
             f"{self.serial} did not complete a new boot after {before}; "
             f"last boot ID was {last_boot_id!r}"
         )
@@ -167,7 +185,7 @@ class PortalInstaller:
             ["shell", "getprop", "ro.build.fingerprint"], timeout=5, check=True
         ).stdout.strip()
         if fingerprint != EXPECTED_FINGERPRINT:
-            raise InstallError(
+            raise ProvisionError(
                 "unsupported firmware; refusing build-specific kernel writes\n"
                 f"expected: {EXPECTED_FINGERPRINT}\nactual:   {fingerprint}"
             )
@@ -175,19 +193,22 @@ class PortalInstaller:
             ["shell", "getprop", "ro.product.device"], timeout=5, check=True
         ).stdout.strip()
         if model != "terry":
-            raise InstallError(f"unsupported device: {model!r}")
+            raise ProvisionError(f"unsupported device: {model!r}")
         print(f"TARGET_OK serial={self.serial} device={model} fingerprint={fingerprint}")
 
     def stage(self) -> None:
-        for local, remote in (
-            (PRELOAD_LOCAL, PRELOAD_REMOTE),
-            (HELPER_LOCAL, HELPER_REMOTE),
-        ):
+        files = [(PRELOAD_LOCAL, PRELOAD_REMOTE)]
+        if self.audio:
+            files.append((HELPER_LOCAL, HELPER_REMOTE))
+        for local, remote in files:
             if not local.is_file() or local.stat().st_size == 0:
-                raise InstallError(f"missing build output: {local}")
+                raise ProvisionError(f"missing build output: {local}")
             self.adb_run(["push", str(local), remote], timeout=30, check=True)
             self.adb_run(["shell", "chmod", "0755", remote], timeout=5, check=True)
-        print(f"STAGED preload={PRELOAD_REMOTE} helper={HELPER_REMOTE}")
+        staged = f"preload={PRELOAD_REMOTE}"
+        if self.audio:
+            staged += f" helper={HELPER_REMOTE}"
+        print(f"STAGED {staged}")
 
     def device_owner_preflight(self) -> bool:
         policy = self.adb_run(
@@ -202,9 +223,9 @@ class PortalInstaller:
             and f"    {component}:" in policy
         )
         if "Device Owner:" in policy and not is_owner:
-            raise InstallError("another Device Owner is already registered")
+            raise ProvisionError("another Device Owner is already registered")
         if not is_admin:
-            raise InstallError(f"Kiosk Satellite admin is not active: {component}")
+            raise ProvisionError(f"Kiosk Satellite admin is not active: {component}")
         print(
             f"DEVICE_OWNER_PREFLIGHT component={component} "
             f"active_admin=1 already_owner={int(is_owner)}"
@@ -253,13 +274,13 @@ class PortalInstaller:
                         candidates[base] += 1
             if candidates:
                 return candidates.most_common(1)[0][0]
-        raise InstallError("simpleperf did not expose a recognized kernel PC")
+        raise ProvisionError("simpleperf did not expose a recognized kernel PC")
 
     def memstart(self, tag: str) -> int:
         result = self.adb_run(["shell", "bugreportz", "-p"], timeout=180)
         match = re.search(r"OK:(\S+\.zip)", result.stdout)
         if not match:
-            raise InstallError(f"bugreportz failed: {result.stdout[-500:]}")
+            raise ProvisionError(f"bugreportz failed: {result.stdout[-500:]}")
         remote = match.group(1)
         with tempfile.TemporaryDirectory(prefix=f"portal-{tag}-") as temporary:
             local = pathlib.Path(temporary) / "bugreport.zip"
@@ -276,11 +297,11 @@ class PortalInstaller:
                     None,
                 )
                 if report_name is None:
-                    raise InstallError("bugreport text is absent from archive")
+                    raise ProvisionError("bugreport text is absent from archive")
                 report = archive.read(report_name).decode(errors="replace")
         match = re.search(r"memory\s+: (0x[0-9a-f]+) -", report)
         if not match:
-            raise InstallError("kernel virtual memory range is absent from bugreport")
+            raise ProvisionError("kernel virtual memory range is absent from bugreport")
         virtual_start = int(match.group(1), 16)
         return (
             0x80000000 - (virtual_start - 0xFFFFFFC000000000)
@@ -309,12 +330,17 @@ class PortalInstaller:
             "GHOSTLOCK_PROC_UID_WARM_MB": "256",
             "GHOSTLOCK_ADBD_ROOT_CONFIGFS": "1",
             "GHOSTLOCK_ROOT_SELF_CONFIGFS": "1",
-            "GHOSTLOCK_AUDIO_CTL": "1",
-            "GHOSTLOCK_AUDIO_PERSIST": "1",
-            "GHOSTLOCK_AUDIO_PERSIST_SO": HELPER_REMOTE,
             "GHOSTLOCK_VOLATILE_LOG": "1",
             "LD_PRELOAD": PRELOAD_REMOTE,
         }
+        if self.audio:
+            environment.update(
+                {
+                    "GHOSTLOCK_AUDIO_CTL": "1",
+                    "GHOSTLOCK_AUDIO_PERSIST": "1",
+                    "GHOSTLOCK_AUDIO_PERSIST_SO": HELPER_REMOTE,
+                }
+            )
         if self.device_owner:
             environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
         if self.disable_updates:
@@ -363,8 +389,10 @@ class PortalInstaller:
                     success_marker = "OTA block install "
                 elif self.device_owner:
                     success_marker = "kiosk device owner install "
-                else:
+                elif self.audio:
                     success_marker = "audio persistence install "
+                else:
+                    raise ProvisionError("no privileged provisioning action selected")
                 if success_marker in line and "ok=1" in line:
                     success = True
                     break
@@ -378,7 +406,7 @@ class PortalInstaller:
             )
             try:
                 self.adb_run(["reboot"], timeout=8)
-            except InstallError:
+            except ProvisionError:
                 pass
             process.terminate()
             try:
@@ -416,7 +444,7 @@ class PortalInstaller:
                 print(last_log.rstrip())
                 return boot_id
             time.sleep(2)
-        raise InstallError(
+        raise ProvisionError(
             "watchdog did not verify after boot; recent log follows:\n"
             + last_log[-4000:]
         )
@@ -439,7 +467,7 @@ class PortalInstaller:
             )
             or "User ID: 0" not in owner_block.group(1)
         ):
-            raise InstallError(
+            raise ProvisionError(
                 "Kiosk Satellite is not the loaded Device Owner; "
                 "dumpsys excerpt follows:\n" + policy[:5000]
             )
@@ -447,7 +475,7 @@ class PortalInstaller:
             ["shell", "getprop", "ro.device_owner"], timeout=5, check=True
         ).stdout.strip()
         if owner_property != "true":
-            raise InstallError(
+            raise ProvisionError(
                 f"Device Owner loaded but ro.device_owner={owner_property!r}"
             )
         print(
@@ -471,7 +499,7 @@ class PortalInstaller:
                     check=True,
                 ).stdout
                 if f"package:{package}" not in already_disabled:
-                    raise InstallError(
+                    raise ProvisionError(
                         f"failed to disable OTA package {package}: {result.stdout}"
                     )
 
@@ -487,7 +515,7 @@ class PortalInstaller:
         )
         missing = [package for package in required if f"package:{package}" not in disabled]
         if missing:
-            raise InstallError(f"OTA packages became enabled: {', '.join(missing)}")
+            raise ProvisionError(f"OTA packages became enabled: {', '.join(missing)}")
 
         deadline = time.monotonic() + wait_seconds
         last_dump = ""
@@ -515,7 +543,7 @@ class PortalInstaller:
                 )
                 return
             time.sleep(2)
-        raise InstallError(
+        raise ProvisionError(
             "OTA daemon did not report its firmware-update gate from the "
             "local override; recent dump/log follow:\n"
             + last_dump[-3000:]
@@ -523,16 +551,282 @@ class PortalInstaller:
             + last_log[-3000:]
         )
 
-    def install(self) -> None:
+    def package_sets(self) -> tuple[set[str], set[str]]:
+        installed_result = self.adb_run(
+            ["shell", "pm", "list", "packages"], timeout=15, check=True
+        )
+        disabled_result = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+        )
+
+        def parse(output: str) -> set[str]:
+            return {
+                line.removeprefix("package:").strip()
+                for line in output.splitlines()
+                if line.startswith("package:")
+            }
+
+        return parse(installed_result.stdout), parse(disabled_result.stdout)
+
+    @staticmethod
+    def parse_debloat_backup(contents: str) -> dict[str, str]:
+        lines = contents.splitlines()
+        if not lines or lines[0] != "# portal-debloat-backup-v1":
+            raise ProvisionError("unrecognized Portal debloat backup format")
+        states: dict[str, str] = {}
+        for line in lines[1:]:
+            if not line:
+                continue
+            fields = line.split("\t")
+            if len(fields) != 2:
+                raise ProvisionError(f"invalid Portal debloat backup line: {line!r}")
+            package, state = fields
+            if package in states or package not in DEBLOAT_PACKAGES:
+                raise ProvisionError(
+                    f"unexpected package in Portal debloat backup: {package!r}"
+                )
+            if state not in {"enabled", "disabled", "absent"}:
+                raise ProvisionError(
+                    f"invalid state in Portal debloat backup: {state!r}"
+                )
+            states[package] = state
+        missing = set(DEBLOAT_PACKAGES) - states.keys()
+        if missing:
+            raise ProvisionError(
+                "Portal debloat backup is incomplete: " + ", ".join(sorted(missing))
+            )
+        return states
+
+    def read_debloat_backup(self, required: bool = True) -> dict[str, str] | None:
+        result = self.adb_run(
+            ["shell", "cat", DEBLOAT_BACKUP_REMOTE], timeout=5
+        )
+        if result.returncode != 0:
+            if required:
+                raise ProvisionError(
+                    f"debloat backup is absent: {DEBLOAT_BACKUP_REMOTE}"
+                )
+            return None
+        return self.parse_debloat_backup(result.stdout)
+
+    def ensure_debloat_backup(self) -> dict[str, str]:
+        existing = self.read_debloat_backup(required=False)
+        if existing is not None:
+            print(f"DEBLOAT_BACKUP_OK existing=1 path={DEBLOAT_BACKUP_REMOTE}")
+            return existing
+
+        installed, disabled = self.package_sets()
+        states = {
+            package: (
+                "absent"
+                if package not in installed
+                else "disabled"
+                if package in disabled
+                else "enabled"
+            )
+            for package in DEBLOAT_PACKAGES
+        }
+        contents = "# portal-debloat-backup-v1\n" + "".join(
+            f"{package}\t{states[package]}\n" for package in DEBLOAT_PACKAGES
+        )
+        remote_tmp = DEBLOAT_BACKUP_REMOTE + ".tmp"
+        with tempfile.TemporaryDirectory(prefix="portal-debloat-") as temporary:
+            local = pathlib.Path(temporary) / "backup.tsv"
+            local.write_text(contents, encoding="utf-8")
+            self.adb_run(["push", str(local), remote_tmp], timeout=15, check=True)
+        command = (
+            f"chmod 0600 {shlex.quote(remote_tmp)} && "
+            f"mv {shlex.quote(remote_tmp)} {shlex.quote(DEBLOAT_BACKUP_REMOTE)}"
+        )
+        self.adb_run(["shell", command], timeout=10, check=True)
+        saved = self.read_debloat_backup(required=True)
+        if saved != states:
+            raise ProvisionError("debloat backup verification failed after write")
+        print(f"DEBLOAT_BACKUP_OK existing=0 path={DEBLOAT_BACKUP_REMOTE}")
+        return states
+
+    def apply_debloat(self) -> None:
+        self.ensure_debloat_backup()
+        installed, _ = self.package_sets()
+        for package in DEBLOAT_PACKAGES:
+            if package not in installed:
+                print(f"DEBLOAT_SKIP package={package} reason=absent")
+                continue
+            result = self.adb_run(
+                ["shell", "pm", "disable-user", "--user", "0", package],
+                timeout=15,
+            )
+            if result.returncode != 0:
+                raise ProvisionError(
+                    f"failed to disable debloat package {package}: {result.stdout}"
+                )
+            print(f"DEBLOAT_DISABLE package={package}")
+        self.settle_package_state()
+        self.verify_debloat()
+
+    def restore_debloat(self) -> None:
+        states = self.read_debloat_backup(required=True)
+        assert states is not None
+        installed, _ = self.package_sets()
+        for package in DEBLOAT_PACKAGES:
+            state = states[package]
+            if state == "absent" or package not in installed:
+                print(
+                    f"DEBLOAT_RESTORE_SKIP package={package} "
+                    f"original_state={state}"
+                )
+                continue
+            action = "enable" if state == "enabled" else "disable-user"
+            command = ["shell", "pm", action, "--user", "0", package]
+            result = self.adb_run(command, timeout=15)
+            if result.returncode != 0:
+                raise ProvisionError(
+                    f"failed to restore package {package} to {state}: {result.stdout}"
+                )
+            print(f"DEBLOAT_RESTORE package={package} state={state}")
+        self.settle_package_state()
+        self.verify_debloat_restored()
+
+    def settle_package_state(self) -> None:
+        # PackageManager writes package-restrictions.xml asynchronously. An
+        # immediate reboot can discard a state that pm already reports live.
+        print(
+            f"PACKAGE_STATE_SETTLE seconds={PACKAGE_STATE_SETTLE_SECONDS}",
+            flush=True,
+        )
+        time.sleep(PACKAGE_STATE_SETTLE_SECONDS)
+        self.adb_run(["shell", "sync"], timeout=15, check=True)
+
+    def verify_retained_platform(self, wait_seconds: int = 45) -> None:
+        deadline = time.monotonic() + wait_seconds
+        ai_pid = ""
+        camera = ""
+        webview = ""
+        home = ""
+        while time.monotonic() < deadline:
+            ai_pid = self.adb_run(
+                ["shell", "pidof", "com.facebook.portal.aiservice"],
+                timeout=5,
+            ).stdout.strip()
+            camera = self.adb_run(
+                ["shell", "dumpsys", "media.camera"], timeout=15
+            ).stdout
+            webview = self.adb_run(
+                ["shell", "dumpsys", "webviewupdate"], timeout=15
+            ).stdout
+            home = self.adb_run(
+                [
+                    "shell",
+                    "cmd",
+                    "package",
+                    "resolve-activity",
+                    "--brief",
+                    "-a",
+                    "android.intent.action.MAIN",
+                    "-c",
+                    "android.intent.category.HOME",
+                ],
+                timeout=10,
+            ).stdout.strip()
+            if (
+                ai_pid
+                and "Number of camera devices: 2" in camera
+                and "Current WebView package (name, version): "
+                "(com.facebook.portal.webview," in webview
+                and "/" in home
+            ):
+                print(
+                    f"DEBLOAT_PLATFORM_OK aiservice_pid={ai_pid} cameras=2 "
+                    f"home={home.splitlines()[-1]}"
+                )
+                return
+            time.sleep(2)
+        raise ProvisionError(
+            "retained Portal services did not become ready after package-state change: "
+            f"aiservice_pid={ai_pid!r} cameras_2="
+            f"{int('Number of camera devices: 2' in camera)} webview="
+            f"{int('(com.facebook.portal.webview,' in webview)} home={home!r}"
+        )
+
+    def verify_debloat(self) -> None:
+        installed, disabled = self.package_sets()
+        missing = [
+            package
+            for package in DEBLOAT_PACKAGES
+            if package in installed and package not in disabled
+        ]
+        if missing:
+            raise ProvisionError(
+                "debloat packages became enabled: " + ", ".join(missing)
+            )
+        self.verify_retained_platform()
+        print(f"DEBLOAT_OK disabled={len(set(DEBLOAT_PACKAGES) & installed)}")
+
+    def verify_debloat_restored(self) -> None:
+        states = self.read_debloat_backup(required=True)
+        assert states is not None
+        installed, disabled = self.package_sets()
+        mismatches = []
+        for package, state in states.items():
+            if state == "absent":
+                continue
+            actual = "disabled" if package in disabled else "enabled"
+            if package not in installed or actual != state:
+                mismatches.append(f"{package}={actual}, expected {state}")
+        if mismatches:
+            raise ProvisionError("debloat restore mismatch: " + "; ".join(mismatches))
+        self.verify_retained_platform()
+        print("DEBLOAT_RESTORE_OK")
+
+    def verify_requested_state(self) -> None:
+        if self.audio:
+            self.verify_watchdog()
+        if self.device_owner:
+            self.verify_device_owner()
+        if self.disable_updates:
+            self.disable_ota_packages()
+            self.verify_ota_block()
+        if self.debloat:
+            self.verify_debloat()
+        if self.restore_bloat:
+            self.verify_debloat_restored()
+
+    def verify_across_two_reboots(self, first_boot: str | None = None) -> None:
+        if first_boot is None:
+            _, first_boot = self.reboot()
+        self.verify_requested_state()
+        print("VERIFY_REBOOT starting", flush=True)
+        before, second_boot = self.reboot()
+        if before != first_boot:
+            raise ProvisionError(
+                f"unexpected boot changed before verification: {first_boot} -> {before}"
+            )
+        self.verify_requested_state()
+        print(
+            f"PROVISION_OK first_boot={first_boot} second_boot={second_boot} "
+            f"logs={self.log_dir}"
+        )
+
+    def provision(self) -> None:
         self.connect(wait_seconds=30)
         self.verify_target()
         already_owner = self.device_owner_preflight() if self.device_owner else False
-        if already_owner and not self.disable_updates:
-            self.verify_device_owner()
-            print("INSTALL_OK Kiosk Satellite is already Device Owner")
-            return
+        if self.debloat:
+            self.apply_debloat()
+        if self.restore_bloat:
+            self.restore_debloat()
         if self.disable_updates:
             self.disable_ota_packages()
+
+        privileged_action = self.audio or self.disable_updates or (
+            self.device_owner and not already_owner
+        )
+        if not privileged_action:
+            self.verify_across_two_reboots()
+            return
+
+        if not self.skip_build:
+            build(build_audio=self.audio)
         self.stage()
         clean_boot_id: str | None = None
         for attempt in range(1, self.attempts + 1):
@@ -550,7 +844,7 @@ class PortalInstaller:
             try:
                 base = self.kaslr_base(str(attempt))
                 memstart = self.memstart(str(attempt))
-            except InstallError as exc:
+            except ProvisionError as exc:
                 print(f"ADDRESS_DISCOVERY_RETRY attempt={attempt} error={exc}")
                 continue
             print(
@@ -563,63 +857,43 @@ class PortalInstaller:
             if not exploit_ok:
                 clean_boot_id = post_attempt_boot
                 continue
-            first_boot = self.verify_watchdog()
-            if first_boot != post_attempt_boot:
-                raise InstallError(
-                    "watchdog verification boot differs from post-attempt boot: "
-                    f"{post_attempt_boot} != {first_boot}"
-                )
-            if self.device_owner:
-                self.verify_device_owner()
-            if self.disable_updates:
-                self.disable_ota_packages()
-                self.verify_ota_block()
-            print("VERIFY_REBOOT starting", flush=True)
-            before, second_boot = self.reboot()
-            if before != first_boot:
-                raise InstallError(
-                    f"unexpected boot changed before verification: {first_boot} -> {before}"
-                )
-            self.verify_watchdog()
-            if self.device_owner:
-                self.verify_device_owner()
-            if self.disable_updates:
-                self.disable_ota_packages()
-                self.verify_ota_block()
-            print(
-                f"INSTALL_OK first_boot={first_boot} second_boot={second_boot} "
-                f"logs={self.log_dir}"
-            )
+            self.verify_across_two_reboots(first_boot=post_attempt_boot)
             return
-        raise InstallError(f"installation failed after {self.attempts} attempts")
+        raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
 
-def build() -> None:
-    commands = (
-        ["make", "-C", str(ROOT / "exploit"), "-j2", "all"],
-        ["make", "-C", str(ROOT / "helper"), "native"],
-    )
+def build(build_audio: bool) -> None:
+    commands = [["make", "-C", str(ROOT / "exploit"), "-j2", "all"]]
+    if build_audio:
+        commands.append(["make", "-C", str(ROOT / "helper"), "native"])
     for command in commands:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
-            raise InstallError(f"build failed: {shlex.join(command)}")
+            raise ProvisionError(f"build failed: {shlex.join(command)}")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Install persistent Portal Go audio, Device Owner, and optional "
-            "OTA controls through the build-specific GhostLock route, then "
-            "verify them across two reboots."
+            "Provision selected Portal Go audio, Device Owner, OTA, and "
+            "debloat controls, then verify them across two reboots."
         )
     )
     parser.add_argument("--serial", default="192.168.1.72:5555")
     parser.add_argument("--attempts", type=int, default=12)
     parser.add_argument(
+        "--audio",
+        action="store_true",
+        help=(
+            "install the persistent hardware AEC/NS watchdog; this remains "
+            "the default action when no provisioning action is specified"
+        ),
+    )
+    parser.add_argument(
         "--device-owner",
         action="store_true",
         help=(
-            "also install Kiosk Satellite as Device Owner and verify it "
+            "install Kiosk Satellite as Device Owner and verify it "
             "across both reboots"
         ),
     )
@@ -634,6 +908,20 @@ def parse_args() -> argparse.Namespace:
             "MobileConfig override for the native OTA daemon"
         ),
     )
+    debloat_group = parser.add_mutually_exclusive_group()
+    debloat_group.add_argument(
+        "--debloat",
+        action="store_true",
+        help=(
+            "persistently disable the conservative Meta app/telemetry "
+            "profile and save each package's original state"
+        ),
+    )
+    debloat_group.add_argument(
+        "--restore-bloat",
+        action="store_true",
+        help="restore package states saved by the first --debloat run",
+    )
     parser.add_argument(
         "--log-dir",
         type=pathlib.Path,
@@ -642,26 +930,38 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not 1 <= args.attempts <= 100:
         parser.error("--attempts must be between 1 and 100")
+    if not any(
+        (
+            args.audio,
+            args.device_owner,
+            args.disable_updates,
+            args.debloat,
+            args.restore_bloat,
+        )
+    ):
+        args.audio = True
     return args
 
 
 def main() -> int:
     args = parse_args()
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_dir = args.log_dir or pathlib.Path(f"/tmp/portal-install-{stamp}")
+    log_dir = args.log_dir or pathlib.Path(f"/tmp/portal-provision-{stamp}")
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
-        if not args.skip_build:
-            build()
-        PortalInstaller(
+        PortalProvisioner(
             args.serial,
             args.attempts,
             log_dir,
+            audio=args.audio,
             device_owner=args.device_owner,
             disable_updates=args.disable_updates,
-        ).install()
-    except (InstallError, OSError, zipfile.BadZipFile) as exc:
-        print(f"INSTALL_ERROR: {exc}", file=sys.stderr)
+            debloat=args.debloat,
+            restore_bloat=args.restore_bloat,
+            skip_build=args.skip_build,
+        ).provision()
+    except (ProvisionError, OSError, zipfile.BadZipFile) as exc:
+        print(f"PROVISION_ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
 

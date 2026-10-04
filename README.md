@@ -17,7 +17,7 @@ The microphone array is processed by the DBMD7/STAX voice DSP before Android rec
 - `exploit/`: Portal-specific GhostLock source and exact-build target constants
 - `helper/`: native boot-time audio watchdog and the earlier APK prototype
 - `analysis/`: offset extraction and kernel analysis helpers
-- `tools/install_audio_persistence.py`: build-specific installer and two-reboot verifier
+- `tools/provision_portal.py`: action-based provisioner and two-reboot verifier
 - `tools/PortalAudioCtl.java`: direct Binder client for Meta's private audio service
 - `docs/findings.md`: chronological investigation record
 - `artifacts/`: manifest for large local firmware, kernel and crash artifacts that are intentionally excluded from Git
@@ -47,13 +47,15 @@ uses the service's own Binder identity to keep these DSP parameters at zero:
 - `AEC_ENABLE` (`3001`)
 - `NS_MODE` (`4001`), including residual-echo suppression
 
-Run the installer from a host with wireless ADB already connected:
+Run the provisioner from a host with wireless ADB already connected. With no
+action flag it retains the original behavior and provisions audio; `--audio`
+selects it explicitly when combining actions:
 
 ```sh
-python3 tools/install_audio_persistence.py --serial 192.168.1.72:5555
+python3 tools/provision_portal.py --serial 192.168.1.72:5555 --audio
 ```
 
-The installer refuses any fingerprint other than the supported build, stages
+The provisioner refuses any fingerprint other than the supported build, stages
 fresh binaries, derives that boot's randomized kernel addresses, retries the
 GhostLock reclaim if needed, and verifies the watchdog across two distinct
 reboots. Attempt logs are written to a timestamped directory under `/tmp`.
@@ -62,8 +64,8 @@ To provision the already-active Kiosk Satellite admin as Android's Device
 Owner at the same time, add `--device-owner`:
 
 ```sh
-python3 tools/install_audio_persistence.py \
-  --serial 192.168.1.72:5555 --device-owner
+python3 tools/provision_portal.py \
+  --serial 192.168.1.72:5555 --audio --device-owner
 ```
 
 Android's normal `dpm set-device-owner` command rejects this Portal because it
@@ -73,7 +75,7 @@ already has Meta accounts. The privileged action instead installs the Android
 other owner record exists. It snapshots the original policy under
 `/data/local/tmp/portal-device-owner-backup`, preserves the system policy
 file's ownership and SELinux label, and commits the owner file with `fsync`
-and an atomic rename. The installer then requires DevicePolicyManager to report
+and an atomic rename. The provisioner then requires DevicePolicyManager to report
 Kiosk Satellite as owner of user 0 and `ro.device_owner=true` after two
 distinct boots. A later run recognizes the existing owner and exits without
 rewriting it or invoking the exploit.
@@ -86,10 +88,10 @@ dependency, so the original cold-start library still resolves its symbols.
 
 ## Persistent OTA disable
 
-The same installer can disable Meta's automatic firmware-update path:
+The same provisioner can disable Meta's automatic firmware-update path:
 
 ```sh
-python3 tools/install_audio_persistence.py \
+python3 tools/provision_portal.py \
   --serial 192.168.1.72:5555 --disable-updates
 ```
 
@@ -106,6 +108,41 @@ daemon's false gate and Meta's `source: OVERRIDE` log on two fresh boots.
 The native `otad` and Android `update_engine` processes still exist because
 both are shared system infrastructure. With the firmware-update gate pinned
 false, `otad` remains idle and does not discover or install a package.
+
+## Reversible debloat profile
+
+The conservative debloat profile disables six user-facing or telemetry
+packages while retaining the Portal camera, audio, identity, presence, media,
+app-management and WebView services:
+
+- `com.facebook.aloha.analytics`
+- `com.facebook.aloha.app.messenger`
+- `com.facebook.aloha.app.whatsapp`
+- `com.facebook.aloha.app.portalfeed`
+- `com.facebook.alohaapps.superframe`
+- `com.facebook.alohaapps.contacts`
+
+Apply it with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial 192.168.1.72:5555 --debloat
+```
+
+This operation uses Android's per-user package state and does not launch the
+kernel exploit. Before changing anything, it records whether every package was
+enabled, disabled, or absent in
+`/data/local/tmp/portal-debloat-backup-v1.tsv`. It then verifies the disabled
+set, both cameras, AI service, Home activity and WebView provider across two
+reboots. Restore exactly those saved package states with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial 192.168.1.72:5555 --restore-bloat
+```
+
+Action flags are independent. For a fresh device that needs every supported
+customization, combine `--audio --device-owner --disable-updates --debloat`.
 
 ## Current state
 
@@ -138,5 +175,12 @@ manifest, and `kFirmwareOtaUpdateEnable=false`; Meta's MobileConfig client
 reported the exact parameter value as `source: OVERRIDE`. Both OTA packages
 remained disabled. Device Owner, persistent wireless ADB, and the audio
 watchdog all passed on the same boot.
+
+On October 4, 2026, the conservative debloat profile was applied and survived
+two clean boots with IDs `c43f3691-0874-445b-bf85-1e55907194dc` and
+`401c4711-17d7-4990-bfbe-544243306f25`. None of the six disabled app processes
+remained running. Both cameras, AI Service, Kiosk Satellite Home, Portal
+WebView, Device Owner, wireless ADB, the OTA block, and the audio watchdog
+remained healthy.
 
 This code is tied to the fingerprint and kernel listed above. A mismatch can panic the device.

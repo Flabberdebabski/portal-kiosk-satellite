@@ -1180,7 +1180,7 @@ zero and parameter 4001 as zero. Meta subsequently reset parameter 4001 to
 again loaded the watchdog without host action. It set both parameters to zero,
 then caught and repaired another `NS_MODE` reset from `5` to `0`. The earlier
 ordinary APK helper was uninstalled while the native watchdog continued to
-run. `tools/install_audio_persistence.py` now packages the exact successful
+run. `tools/provision_portal.py` now packages the exact successful
 exploit settings, checks the firmware fingerprint, builds and stages both
 binaries, retries nondeterministic reclaim misses, and verifies two separate
 post-install boots.
@@ -1288,3 +1288,33 @@ Current result: automatic firmware updates are pinned off across boot while
 the shared MobileConfig service remains healthy. Hardware AEC and residual
 echo suppression remain disabled, wireless ADB is persistent, and Kiosk
 Satellite remains Device Owner.
+
+124. Renamed the multi-purpose host tool from
+`tools/install_audio_persistence.py` to `tools/provision_portal.py` and made
+its actions explicit. `--debloat` and `--restore-bloat` use PackageManager
+without launching GhostLock; privileged actions still build and stage only the
+binaries they require. An invocation with no action retains the original audio
+provisioning behavior.
+
+125. Added a conservative debloat profile for Meta Analytics, Messenger,
+WhatsApp, Portal Feed, Superframe, and Meta Contacts. The first run stores each
+package's original state in
+`/data/local/tmp/portal-debloat-backup-v1.tsv`; restore uses that snapshot
+instead of blindly enabling every package. An initial immediate reboot exposed
+that PackageManager had reported the live disabled states before flushing
+`package-restrictions.xml`, so all six reverted. Waiting 15 seconds and issuing
+`sync` made the states durable.
+
+126. The completed provisioner run verified the disabled set on clean boot IDs
+`c43f3691-0874-445b-bf85-1e55907194dc` and
+`401c4711-17d7-4990-bfbe-544243306f25`. None of the six application processes
+were running. The verifier also required both camera devices, AI Service,
+Kiosk Satellite's Home activity, and the sole Portal WebView provider to become
+ready, with a bounded wait for Meta services that start after Android reports
+`sys.boot_completed=1`. Device Owner, wireless ADB, the OTA block, and the
+audio watchdog remained intact; the watchdog again repaired NS mode from 5 to
+0 on the final boot.
+
+Current result: the conservative debloat profile is active and reversible, and
+the retained camera, kiosk, WebView, audio, OTA, Device Owner, and ADB paths are
+healthy after two clean boots.

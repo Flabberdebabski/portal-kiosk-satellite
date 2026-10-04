@@ -135,3 +135,26 @@ the durable local override was active rather than merely observing the
 server's current false value. Both OTA packages remained disabled. The same
 boot also verified Device Owner, wireless ADB on port 5555, and audio parameters
 3001/4001 at zero.
+
+The host tool is now `tools/provision_portal.py`. Its actions are independent:
+`--audio`, `--device-owner`, `--disable-updates`, `--debloat`, and
+`--restore-bloat`. With no action flag, it retains the former audio-provisioning
+default. Debloat and restore use normal per-user PackageManager controls and do
+not invoke GhostLock unless combined with a privileged action.
+
+The conservative debloat set contains Meta Analytics, Messenger, WhatsApp,
+Portal Feed, Superframe, and Meta Contacts. The first application records each
+package's original enabled, disabled, or absent state in
+`/data/local/tmp/portal-debloat-backup-v1.tsv`; restore applies those exact
+states. A 15-second settle period and `sync` are required before reboot because
+Android reports new package states before its asynchronous
+`package-restrictions.xml` write is durable.
+
+The debloat state survived clean boots
+`c43f3691-0874-445b-bf85-1e55907194dc` and
+`401c4711-17d7-4990-bfbe-544243306f25`. All six packages remained disabled and
+none of their application processes were present. Both cameras, AI Service,
+Kiosk Satellite Home, Portal WebView, Device Owner, wireless ADB, the OTA block,
+and the audio watchdog remained healthy. The final watchdog startup again read
+AEC 3001 and NS mode 4001 as zero and corrected Meta's later NS rewrite from 5
+to 0.
