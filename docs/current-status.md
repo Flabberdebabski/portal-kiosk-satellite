@@ -36,8 +36,13 @@ before any ashmem open.
 
 The first corrected sendmmsg run returned zero from `sched_setattr`. It then
 spent 0.38 seconds on the obsolete socket scan and the finite ext4 gate expired
-before the KGSL verifier ran. The verifier now checks KGSL first and the gate
-size is configurable for a longer post-write interval.
+before the KGSL verifier ran. A second run with a 512 MiB gate established that
+the scheduler syscall itself remains blocked until the gate expires, so a
+larger file delays both events without creating post-write time. The scheduler
+consumer now scans the already populated KGSL mappings immediately on return,
+before any syscall, log operation, or cross-thread wakeup. Its return line
+includes `kgsl_hit`: positive identifies an owner-zero fake table, negative a
+matching table with a nonzero owner, and zero no observed collision.
 
 After that checkpoint, the remaining sequence is:
 

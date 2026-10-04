@@ -955,3 +955,15 @@ accepts a larger backing-file size so the held interval can be extended for
 post-write verification.
 
 Current result: hardware echo cancellation remains enabled.
+
+95. A repeat with a 512 MiB proc_uid backing file showed that increasing the
+gate size does not leave a useful post-write interval. It delays the scheduler
+operation proportionally, but `sched_setattr` returns only when the ext4 gate
+finishes; the damaged legitimate waiter can then reboot the device before a
+different thread runs. Collision detection now executes in the scheduler
+consumer itself immediately after the syscall returns. It reads only the
+already populated KGSL mappings before logging, waking another thread, or
+making another syscall, and reports the matching mapping as `kgsl_hit` in the
+scheduler return line.
+
+Current result: hardware echo cancellation remains enabled.
