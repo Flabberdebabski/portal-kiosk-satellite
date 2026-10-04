@@ -988,3 +988,14 @@ for the entire trigger. When parent watching is enabled, the child also skips
 its post-`sched_setattr` KGSL scan so it cannot fault on a non-inherited VMA.
 
 Current result: hardware echo cancellation remains enabled.
+
+98. The corrected parent-side watcher remained valid through a complete
+constrained-write run, but reported no hit among 2,048 KGSL mappings; the
+consumer returned zero with `kgsl_hit=0`. This exposed an ordering gap in the
+reclaim sequence. A freed object in a frozen SLUB page may not return its
+order-2 slab to buddy until the later CPU-partial marker drain, while all KGSL
+allocations previously happened before that drain. KGSL reclaim is now split:
+an early batch follows the target close, and the remaining allocations run
+immediately after the marker drain, before socket allocation or logging.
+
+Current result: hardware echo cancellation remains enabled.

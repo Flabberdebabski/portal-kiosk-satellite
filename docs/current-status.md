@@ -51,7 +51,12 @@ therefore faulted before the next attempt reached the timeout. The watcher now
 runs in the pre-fork parent, which owns the KGSL mappings and remains alive in
 `waitpid` throughout the trigger. It scans on a spare CPU while `sched_setattr`
 is blocked and emits a minimal `KGSL_WATCH_HIT` marker on observing the write.
-The child skips its mapping scan in this mode.
+The child skips its mapping scan in this mode. The corrected watcher observed
+no collision among 2,048 mappings during a complete constrained-write run.
+The reclaim sequence had allocated all KGSL pages before the later marker
+close that drains a frozen CPU-partial slab. It now uses an early batch after
+the target close and performs the remaining KGSL allocations immediately
+after that drain, covering both ways the target slab can reach buddy.
 
 After that checkpoint, the remaining sequence is:
 
