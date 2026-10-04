@@ -1033,3 +1033,15 @@ reclaim. At that point KGSL owns any captured page, while the gate still exists
 before the proc-lock trigger.
 
 Current result: hardware echo cancellation remains enabled.
+
+102. With gate construction deferred, a 20-slab cache cycle completed in about
+two seconds and all three KGSL reclaim stages reached 4,096 mappings. The
+constrained scheduler operation still returned zero, but the all-slot watcher
+reported no KGSL overlap. Successful use of the fake graph despite that miss
+keeps the UNIX page-fragment allocation as the leading page owner: an order-3
+allocation can absorb the order-2 target after buddy coalescing, while the old
+socket verifier checked only one assumed stream offset. A parent-side socket
+watcher now peeks the full queued payload and scans every aligned word for the
+constrained target, independent of fragment offset or order-3 half.
+
+Current result: hardware echo cancellation remains enabled.

@@ -69,7 +69,12 @@ CPU partial storage after the target becomes an early empty slab; KGSL then
 runs at this additional discard boundary. The first test placed this cycle
 after the large proc_uid gate and was stopped when clone page-table copying
 made the device unresponsive. Refill tasks are now reaped one at a time, and
-the proc_uid gate is built only after cache cycling and KGSL capture.
+the proc_uid gate is built only after cache cycling and KGSL capture. A
+20-slab corrected run completed normally but still produced no KGSL hit across
+4,096 buffers. Because the fake graph nevertheless completes the scheduler
+operation, a concurrent parent watcher now peeks and scans the entire UNIX
+socket payload for the constrained word instead of assuming one fragment
+offset.
 
 After that checkpoint, the remaining sequence is:
 
