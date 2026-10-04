@@ -147,8 +147,52 @@ customization, combine them in one run:
 
 ```sh
 python3 tools/provision_portal.py --serial 192.168.1.72:5555 \
-  --audio --device-owner --disable-updates --debloat --remove-meta-accounts
+  --audio --device-owner --disable-updates --debloat --remove-meta-accounts \
+  --optimize-presence
 ```
+
+## Presence-preserving AI optimization
+
+Kiosk Satellite uses AIService's `Notify people presence` log as the Portal's
+LED-free presence signal. The optional presence profile keeps that detector,
+the AIService camera client, tracking, and pose estimation running while it
+turns off four downstream Smart Camera workloads:
+
+- background segmentation
+- liveness scoring
+- color-based re-identification
+- face-recognition-based re-identification
+
+Apply the profile while somebody is in front of the Portal so the live
+verifier can observe a new presence heartbeat:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial 192.168.1.72:5555 --optimize-presence
+```
+
+The privileged installer atomically writes AIService's private
+`settings_config.xml` with the app's UID, GID, and SELinux label. If a settings
+file already exists and was not created by this project, the installer saves
+it and refuses to replace it. Otherwise it records that the file was absent
+under `/data/local/tmp/portal-presence-backup`. Every verification boot
+requires AIService to own an active camera client, retain the CAMERA AppOp,
+load all four values as false, and emit the exact presence log Kiosk Satellite
+consumes.
+
+Restore the saved file, or remove the project-owned file when none existed,
+with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial 192.168.1.72:5555 --restore-presence-profile
+```
+
+On the tested Portal, six equal-length samples averaged 47.8% of one CPU core
+before the profile and 22.1% afterward. The background-detector thread alone
+had averaged 11.6%; after the change, its worker and the liveness worker were
+absent. These measurements are workload samples rather than a benchmark, but
+the same exact presence heartbeat passed on two clean boots.
 
 ## Remove Meta accounts
 
@@ -221,5 +265,13 @@ package remained enabled. Verification boots
 `8762d7c6-1db1-400f-9559-8df8dc9f5f33` both reported zero target accounts,
 two camera devices, a running AI service, Kiosk Satellite Home, and the Portal
 WebView provider. SELinux returned to enforcing after the exploit boot.
+
+On October 4, 2026, the presence-preserving AI profile was installed and
+verified on clean boot IDs `64e187d4-1999-4152-83ba-f66d763dcf86` and
+`57488e98-61b0-45be-9128-4447503e8c1e`. AIService loaded all four disabled
+workload settings, retained its active camera client and CAMERA permission,
+and emitted `Notify people presence` on both boots. Sampled AIService CPU fell
+from 47.8% to 22.1% of one core while Kiosk Satellite's log-based presence
+source remained available.
 
 This code is tied to the fingerprint and kernel listed above. A mismatch can panic the device.

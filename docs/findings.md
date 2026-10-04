@@ -1358,3 +1358,49 @@ completed state and skipped GhostLock, proving the action is idempotent.
 Current result: the Portal no longer has local Meta accounts and cannot
 recreate them through its account authenticators. Camera, kiosk, WebView,
 audio, OTA, Device Owner, and wireless ADB paths remain healthy.
+
+131. Traced Kiosk Satellite's LED-free presence source through AIService. The
+observable contract is the exact `Notify people presence` log emitted when
+AIService's world model contains at least one person. Background segmentation,
+liveness metrics, and re-identification consume later results and are not
+required to produce that presence notification. Tracking and pose estimation
+remain part of the retained path.
+
+132. Added the reversible `--optimize-presence` action. Its privileged stage
+atomically installs AIService's private `settings_config.xml` with four false
+values: `enable_cv_background_detector_v2`, `enable_liveness_metric`,
+`enable_color_based_reid`, and `enable_face_rec_based_reid_v3`. It preserves
+the private directory's UID, GID, and SELinux label. An unrelated existing
+settings file is first snapshotted and then left untouched. When the file was
+originally absent, an absence marker is stored under
+`/data/local/tmp/portal-presence-backup`. The paired
+`--restore-presence-profile` action restores that exact state and refuses to
+overwrite a later unrelated edit.
+
+133. The verifier treats Kiosk Satellite's real input as a required runtime
+contract. On every verification boot it requires the AIService process, its
+active camera client, an allowed CAMERA AppOp, all four XML values logged as
+false, and the exact `Notify people presence` heartbeat. This means a person
+must be visible during provisioning; lack of a heartbeat fails the run rather
+than silently accepting a broken detector.
+
+134. Installed and verified the profile on two clean boots,
+`64e187d4-1999-4152-83ba-f66d763dcf86` and
+`57488e98-61b0-45be-9128-4447503e8c1e`. Both boots satisfied the camera and
+presence contract with SELinux enforcing. In six matched samples, total
+AIService CPU averaged 47.8% of one core before the change and 22.1% after it,
+about a 54% reduction. The `BackgroundDetec` thread, previously averaging
+11.6%, and the liveness worker were absent. Re-identification workers also
+disappeared from the sampled thread list.
+
+135. AIService contains an internal `CAMERA_2_FPS` resource profile, but the
+exposed `enable_2fps_throttle` debug control is backed by debug preferences and
+is not loaded from the durable settings XML at process start. The numeric pose
+FPS value is likewise read from a separate preferences store. No speculative
+frame-rate override was installed; the current profile contains only the four
+switches proven across reboot.
+
+Current result: Kiosk Satellite's log-based, LED-free person detector remains
+live while optional AIService work is disabled. The profile is active,
+reversible, and reduced sampled AIService CPU by roughly half across the tested
+workload.

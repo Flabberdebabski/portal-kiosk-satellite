@@ -58,6 +58,13 @@ META_AUTHENTICATOR_COMPONENTS = (
     "com.facebook.aloha.system.alohausers.services2."
     "PrivOwnerAccountsAuthenticatorService",
 )
+PRESENCE_PROFILE_KEYS = (
+    "enable_cv_background_detector_v2",
+    "enable_liveness_metric",
+    "enable_color_based_reid",
+    "enable_face_rec_based_reid_v3",
+)
+PRESENCE_LOG_MARKER = "Notify people presence"
 
 
 class ProvisionError(RuntimeError):
@@ -76,6 +83,8 @@ class PortalProvisioner:
         debloat: bool = False,
         restore_bloat: bool = False,
         remove_meta_accounts: bool = False,
+        optimize_presence: bool = False,
+        restore_presence_profile: bool = False,
         skip_build: bool = False,
     ):
         self.serial = serial
@@ -87,6 +96,8 @@ class PortalProvisioner:
         self.debloat = debloat
         self.restore_bloat = restore_bloat
         self.remove_meta_accounts = remove_meta_accounts
+        self.optimize_presence = optimize_presence
+        self.restore_presence_profile = restore_presence_profile
         self.skip_build = skip_build
         self.adb = ["adb", "-s", serial]
 
@@ -416,6 +427,10 @@ class PortalProvisioner:
             environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
         if self.disable_updates:
             environment["GHOSTLOCK_OTA_BLOCK"] = "1"
+        if self.optimize_presence:
+            environment["GHOSTLOCK_PRESENCE_PROFILE"] = "1"
+        if self.restore_presence_profile:
+            environment["GHOSTLOCK_RESTORE_PRESENCE_PROFILE"] = "1"
         if self.remove_meta_accounts:
             environment.update(
                 {
@@ -465,6 +480,10 @@ class PortalProvisioner:
                 output.flush()
                 if self.remove_meta_accounts:
                     success_marker = "Meta account removal "
+                elif self.restore_presence_profile:
+                    success_marker = "presence profile restore "
+                elif self.optimize_presence:
+                    success_marker = "presence profile install "
                 elif self.disable_updates:
                     success_marker = "OTA block install "
                 elif self.device_owner:
@@ -858,6 +877,87 @@ class PortalProvisioner:
         self.verify_retained_platform()
         print("DEBLOAT_RESTORE_OK")
 
+    def verify_presence_runtime(
+        self, require_profile: bool, wait_seconds: int = 90
+    ) -> None:
+        deadline = time.monotonic() + wait_seconds
+        pid = ""
+        camera_active = False
+        camera_allowed = False
+        heartbeat = False
+        loaded_keys: set[str] = set()
+        threads = ""
+        while time.monotonic() < deadline:
+            pid = self.adb_run(
+                ["shell", "pidof", "com.facebook.portal.aiservice"], timeout=5
+            ).stdout.strip()
+            camera = self.adb_run(
+                ["shell", "dumpsys", "media.camera"], timeout=15
+            ).stdout
+            camera_active = (
+                "Active Camera Clients:" in camera
+                and "Client Package Name: com.facebook.portal.aiservice" in camera
+            )
+            appops = self.adb_run(
+                [
+                    "shell",
+                    "cmd",
+                    "appops",
+                    "get",
+                    "com.facebook.portal.aiservice",
+                    "CAMERA",
+                ],
+                timeout=10,
+            ).stdout
+            camera_allowed = "CAMERA: allow" in appops
+            logs = self.adb_run(
+                ["shell", "logcat", "-d", "-v", "brief"], timeout=20
+            ).stdout
+            heartbeat = PRESENCE_LOG_MARKER in logs
+            loaded_keys = {
+                key
+                for key in PRESENCE_PROFILE_KEYS
+                if any(
+                    "settings_config.xml" in line
+                    and key in line
+                    and re.search(r"\bfalse\b", line, re.IGNORECASE)
+                    for line in logs.splitlines()
+                )
+            }
+            config_ready = not require_profile or loaded_keys == set(
+                PRESENCE_PROFILE_KEYS
+            )
+            if (
+                pid
+                and camera_active
+                and camera_allowed
+                and heartbeat
+                and config_ready
+            ):
+                threads = self.adb_run(
+                    ["shell", "ps", "-T", "-p", pid.split()[0]], timeout=10
+                ).stdout
+                disabled_workers = [
+                    name
+                    for name in ("BackgroundDetec", "alohaLivenessMa")
+                    if name not in threads
+                ]
+                print(
+                    "PRESENCE_RUNTIME_OK "
+                    f"pid={pid.split()[0]} camera=active appop=allow "
+                    "heartbeat=observed "
+                    f"profile_keys={len(loaded_keys)} "
+                    f"workers_absent={','.join(disabled_workers) or 'none'}"
+                )
+                return
+            time.sleep(2)
+        raise ProvisionError(
+            "presence pipeline did not pass its live compatibility check: "
+            f"pid={pid!r} camera_active={int(camera_active)} "
+            f"camera_allowed={int(camera_allowed)} heartbeat={int(heartbeat)} "
+            f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
+        )
+
     def verify_meta_accounts_removed(self) -> None:
         accounts = self.meta_accounts()
         if accounts:
@@ -896,6 +996,10 @@ class PortalProvisioner:
             self.verify_debloat_restored()
         if self.remove_meta_accounts:
             self.verify_meta_accounts_removed()
+        if self.optimize_presence:
+            self.verify_presence_runtime(require_profile=True)
+        if self.restore_presence_profile:
+            self.verify_presence_runtime(require_profile=False)
 
     def verify_across_two_reboots(self, first_boot: str | None = None) -> None:
         if first_boot is None:
@@ -927,9 +1031,14 @@ class PortalProvisioner:
         if self.disable_updates:
             self.disable_ota_packages()
 
-        privileged_action = self.audio or self.disable_updates or (
-            self.device_owner and not already_owner
-        ) or (self.remove_meta_accounts and not already_meta_clean)
+        privileged_action = (
+            self.audio
+            or self.disable_updates
+            or self.optimize_presence
+            or self.restore_presence_profile
+            or (self.device_owner and not already_owner)
+            or (self.remove_meta_accounts and not already_meta_clean)
+        )
         if not privileged_action:
             self.verify_across_two_reboots()
             return
@@ -990,7 +1099,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Provision selected Portal Go audio, Device Owner, OTA, debloat, "
-            "and Meta-account controls, then verify them across two reboots."
+            "Meta-account, and presence-processing controls, then verify them "
+            "across two reboots."
         )
     )
     parser.add_argument("--serial", default="192.168.1.72:5555")
@@ -1044,6 +1154,24 @@ def parse_args() -> argparse.Namespace:
             "disable only their authenticator service components"
         ),
     )
+    presence_group = parser.add_mutually_exclusive_group()
+    presence_group.add_argument(
+        "--optimize-presence",
+        action="store_true",
+        help=(
+            "disable Smart Camera background segmentation, liveness scoring, "
+            "and re-identification while requiring AIService's person-presence "
+            "log to remain live"
+        ),
+    )
+    presence_group.add_argument(
+        "--restore-presence-profile",
+        action="store_true",
+        help=(
+            "restore the AIService settings file saved by the first "
+            "--optimize-presence run"
+        ),
+    )
     parser.add_argument(
         "--log-dir",
         type=pathlib.Path,
@@ -1060,6 +1188,8 @@ def parse_args() -> argparse.Namespace:
             args.debloat,
             args.restore_bloat,
             args.remove_meta_accounts,
+            args.optimize_presence,
+            args.restore_presence_profile,
         )
     ):
         args.audio = True
@@ -1082,6 +1212,8 @@ def main() -> int:
             debloat=args.debloat,
             restore_bloat=args.restore_bloat,
             remove_meta_accounts=args.remove_meta_accounts,
+            optimize_presence=args.optimize_presence,
+            restore_presence_profile=args.restore_presence_profile,
             skip_build=args.skip_build,
         ).provision()
     except (ProvisionError, OSError, zipfile.BadZipFile) as exc:

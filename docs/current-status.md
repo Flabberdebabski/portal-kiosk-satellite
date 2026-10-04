@@ -138,10 +138,11 @@ boot also verified Device Owner, wireless ADB on port 5555, and audio parameters
 
 The host tool is now `tools/provision_portal.py`. Its actions are independent:
 `--audio`, `--device-owner`, `--disable-updates`, `--debloat`,
-`--restore-bloat`, and `--remove-meta-accounts`. With no action flag, it
-retains the former audio-provisioning default. Debloat and restore use normal
-per-user PackageManager controls and do not invoke GhostLock unless combined
-with a privileged action.
+`--restore-bloat`, `--remove-meta-accounts`, `--optimize-presence`, and
+`--restore-presence-profile`. With no action flag, it retains the former
+audio-provisioning default. Debloat and restore use normal per-user
+PackageManager controls and do not invoke GhostLock unless combined with a
+privileged action.
 
 The conservative debloat set contains Meta Analytics, Messenger, WhatsApp,
 Portal Feed, Superframe, and Meta Contacts. The first application records each
@@ -178,3 +179,21 @@ all four authenticators disabled. Both cameras, AI Service, Kiosk Satellite
 Home, and Portal WebView remained available; SELinux was enforcing. Repeated
 `--remove-meta-accounts` runs recognize the completed state and perform only
 the two-reboot verification.
+
+AIService supplies Kiosk Satellite's LED-free presence source through the
+exact `Notify people presence` log. The optional presence profile disables
+background segmentation, liveness scoring, color re-identification, and face
+re-identification while leaving tracking and pose estimation enabled. The
+installer writes AIService's private `settings_config.xml` atomically with its
+original app-data ownership and SELinux label, records the original state
+under `/data/local/tmp/portal-presence-backup`, and refuses to overwrite an
+unrelated settings file. Its restore action also refuses to replace a settings
+file changed after installation.
+
+Clean boots `64e187d4-1999-4152-83ba-f66d763dcf86` and
+`57488e98-61b0-45be-9128-4447503e8c1e` each loaded all four profile values as
+false, retained AIService's active camera client and allowed CAMERA AppOp, and
+emitted the presence log. Six matched process samples averaged 47.8% of one
+CPU core before the profile and 22.1% after it. The background detector had
+averaged 11.6% by itself; its worker and the liveness worker were absent with
+the profile active.
