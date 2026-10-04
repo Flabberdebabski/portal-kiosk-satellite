@@ -901,3 +901,46 @@ KASLR-adjusted addresses until it reads the real `memstart_addr` through the
 configfs primitive and configures direct-map translation.
 
 Current result: hardware echo cancellation remains enabled.
+
+90. Preallocating the complete proc-lock gate did not change the FOPS-open
+failure. The scheduler operation returned zero, but `misc_open()` again passed
+`0xc` as the fake table's owner to `try_module_get()`. This disproves the
+specific theory that the gate's later VMA and page-table allocations caused
+the corrupt first word. A new held diagnostic uses `MSG_PEEK` on every reclaim
+socket after the scheduler write. It searches for the canonical
+`ashmem_misc.fops` target at the fake table's exact per-message offset and
+reports the adjacent words without consuming or freeing the backing page. The
+next run can therefore distinguish payload corruption from a later FOPS-open
+effect without deliberately panicking the device.
+
+Current result: hardware echo cancellation remains enabled.
+
+91. The held payload inspection returned `table_hits=0` across 64 reclaim
+socket pairs. This means the constrained write succeeded without the leaked
+order-2 slab page being owned by any queued socket payload. The owner values
+`0x11` and `0xc` were unrelated freed-page contents, not corruption after a
+successful reclaim.
+
+92. Exact allocator analysis found the mismatch. `unix_stream_sendmsg()` uses
+the task page-fragment cache, whose refill is an order-3 compound allocation
+with an order-0 fallback on this kernel. The 16 KiB data fragment merely uses
+half of that order-3 page. It cannot directly reclaim the order-2
+`mm_struct` slab page. The earlier `GHOSTLOCK_RECLAIM_ORDER2_ONLY` name
+described message length, not the allocator order, and was therefore
+misleading.
+
+93. `/dev/kgsl-3d0` is available to the shell. A live
+`KGSL_IOC_GPUMEM_ALLOC_ID` probe successfully allocated and mapped 16 KiB
+buffers with alignment exponent 14. The exact KGSL implementation requests
+an order-2 compound page for that geometry, and the installed live device
+tree has no `qcom,gpu-mempools` node, so it uses the direct `alloc_pages()`
+path rather than falling back through configured pool sizes. The exploit now
+retains a pre-free drain set, performs the KGSL allocations immediately after
+freeing the target, writes the payload through each userspace mapping, and
+checks every mapped fake table after the constrained write. The first launch
+selected the old sigreturn route because the stack-route environment variable
+was omitted; it was interrupted before a scheduler write. A parent-death
+signal now prevents future ADB interruptions from leaving the gate child
+orphaned.
+
+Current result: hardware echo cancellation remains enabled.
