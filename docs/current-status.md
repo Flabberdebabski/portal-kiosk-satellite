@@ -137,10 +137,11 @@ boot also verified Device Owner, wireless ADB on port 5555, and audio parameters
 3001/4001 at zero.
 
 The host tool is now `tools/provision_portal.py`. Its actions are independent:
-`--audio`, `--device-owner`, `--disable-updates`, `--debloat`, and
-`--restore-bloat`. With no action flag, it retains the former audio-provisioning
-default. Debloat and restore use normal per-user PackageManager controls and do
-not invoke GhostLock unless combined with a privileged action.
+`--audio`, `--device-owner`, `--disable-updates`, `--debloat`,
+`--restore-bloat`, and `--remove-meta-accounts`. With no action flag, it
+retains the former audio-provisioning default. Debloat and restore use normal
+per-user PackageManager controls and do not invoke GhostLock unless combined
+with a privileged action.
 
 The conservative debloat set contains Meta Analytics, Messenger, WhatsApp,
 Portal Feed, Superframe, and Meta Contacts. The first application records each
@@ -158,3 +159,22 @@ Kiosk Satellite Home, Portal WebView, Device Owner, wireless ADB, the OTA block,
 and the audio watchdog remained healthy. The final watchdog startup again read
 AEC 3001 and NS mode 4001 as zero and corrected Meta's later NS rewrite from 5
 to 0.
+
+The Portal-specific Meta accounts are now removed. Static and live inspection
+identified four account types provided by four authenticator services in
+`com.facebook.alohaservices.alohausers`: proxy SSO, platform login, hardware,
+and private owner. Meta's official owner-removal flow requires a valid server
+user context, while its public `CLEAR_ACCOUNT` receiver only clears proxy SSO.
+The privileged local path therefore removes the Android AccountManager
+records, clears the identity rows in `aloha_users_db` and
+`aloha_users_database`, and disables only those four authenticator components.
+
+The original type/name inventory is retained at
+`/data/local/tmp/portal-meta-accounts-before-v1.tsv`. The shared `alohausers`
+package remains enabled for MobileConfig and other platform services. Clean
+boots `8db565c4-f7c2-40dc-9df5-aba6b4a98390` and
+`8762d7c6-1db1-400f-9559-8df8dc9f5f33` each reported zero target accounts and
+all four authenticators disabled. Both cameras, AI Service, Kiosk Satellite
+Home, and Portal WebView remained available; SELinux was enforcing. Repeated
+`--remove-meta-accounts` runs recognize the completed state and perform only
+the two-reboot verification.

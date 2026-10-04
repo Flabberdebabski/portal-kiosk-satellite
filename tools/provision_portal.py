@@ -26,6 +26,8 @@ PRELOAD_LOCAL = ROOT / "exploit/build/preload-portal-terry-5051355900018050.so"
 HELPER_LOCAL = ROOT / "helper/build/libportal_audio_persist.so"
 PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
+ACCOUNT_CTL_LOCAL = ROOT / "exploit/build/portal-account-ctl.jar"
+ACCOUNT_CTL_REMOTE = "/data/local/tmp/portal-account-ctl.jar"
 KIOSK_COMPONENT = "me.jxl.kiosk_satellite/.KioskAdminReceiver"
 KIOSK_OWNER_COMPONENTS = (
     "admin=me.jxl.kiosk_satellite/.KioskAdminReceiver",
@@ -41,6 +43,20 @@ DEBLOAT_PACKAGES = (
     "com.facebook.aloha.app.portalfeed",
     "com.facebook.alohaapps.superframe",
     "com.facebook.alohaapps.contacts",
+)
+META_ACCOUNT_BACKUP_REMOTE = "/data/local/tmp/portal-meta-accounts-before-v1.tsv"
+META_ACCOUNT_TYPES = (
+    "com.facebook.aloha.sso",
+    "com.facebook.aloha.pl",
+    "com.facebook.aloha.hw",
+    "com.facebook.aloha.privowner",
+)
+META_AUTHENTICATOR_COMPONENTS = (
+    "com.facebook.aloha.system.alohausers.services.AuthenticationService",
+    "com.facebook.aloha.system.alohausers.services2.PLAuthenticatorService",
+    "com.facebook.aloha.system.alohausers.services2.HWAuthenticatorService",
+    "com.facebook.aloha.system.alohausers.services2."
+    "PrivOwnerAccountsAuthenticatorService",
 )
 
 
@@ -59,6 +75,7 @@ class PortalProvisioner:
         disable_updates: bool = False,
         debloat: bool = False,
         restore_bloat: bool = False,
+        remove_meta_accounts: bool = False,
         skip_build: bool = False,
     ):
         self.serial = serial
@@ -69,6 +86,7 @@ class PortalProvisioner:
         self.disable_updates = disable_updates
         self.debloat = debloat
         self.restore_bloat = restore_bloat
+        self.remove_meta_accounts = remove_meta_accounts
         self.skip_build = skip_build
         self.adb = ["adb", "-s", serial]
 
@@ -100,21 +118,14 @@ class PortalProvisioner:
         return self.run(self.adb + args, timeout=timeout, check=check)
 
     def connect(self, wait_seconds: int = 150) -> None:
-        subprocess.run(
-            ["adb", "disconnect", self.serial],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            self.run(["adb", "disconnect", self.serial], timeout=5)
+        except ProvisionError:
+            pass
         deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline:
-            subprocess.run(
-                ["adb", "connect", self.serial],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
             try:
+                self.run(["adb", "connect", self.serial], timeout=5)
                 state = self.adb_run(["get-state"], timeout=5)
                 completed = self.adb_run(
                     ["shell", "getprop", "sys.boot_completed"], timeout=5
@@ -141,22 +152,15 @@ class PortalProvisioner:
         return before, after
 
     def connect_after_reboot(self, before: str, wait_seconds: int = 180) -> str:
-        subprocess.run(
-            ["adb", "disconnect", self.serial],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+        try:
+            self.run(["adb", "disconnect", self.serial], timeout=5)
+        except ProvisionError:
+            pass
         deadline = time.monotonic() + wait_seconds
         last_boot_id = ""
         while time.monotonic() < deadline:
-            subprocess.run(
-                ["adb", "connect", self.serial],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
             try:
+                self.run(["adb", "connect", self.serial], timeout=5)
                 state = self.adb_run(["get-state"], timeout=5)
                 completed = self.adb_run(
                     ["shell", "getprop", "sys.boot_completed"], timeout=5
@@ -200,6 +204,8 @@ class PortalProvisioner:
         files = [(PRELOAD_LOCAL, PRELOAD_REMOTE)]
         if self.audio:
             files.append((HELPER_LOCAL, HELPER_REMOTE))
+        if self.remove_meta_accounts:
+            files.append((ACCOUNT_CTL_LOCAL, ACCOUNT_CTL_REMOTE))
         for local, remote in files:
             if not local.is_file() or local.stat().st_size == 0:
                 raise ProvisionError(f"missing build output: {local}")
@@ -208,7 +214,72 @@ class PortalProvisioner:
         staged = f"preload={PRELOAD_REMOTE}"
         if self.audio:
             staged += f" helper={HELPER_REMOTE}"
+        if self.remove_meta_accounts:
+            staged += f" account_ctl={ACCOUNT_CTL_REMOTE}"
         print(f"STAGED {staged}")
+
+    def meta_accounts(self) -> list[tuple[str, str]]:
+        output = self.adb_run(
+            ["shell", "dumpsys", "account"], timeout=20, check=True
+        ).stdout
+        accounts = re.findall(
+            r"Account \{name=([^,}]+), type=([^}]+)\}", output
+        )
+        return [
+            (name, account_type)
+            for name, account_type in accounts
+            if account_type in META_ACCOUNT_TYPES
+        ]
+
+    def disabled_meta_authenticators(self) -> set[str]:
+        output = self.adb_run(
+            ["shell", "dumpsys", "package", "com.facebook.alohaservices.alohausers"],
+            timeout=20,
+            check=True,
+        ).stdout
+        match = re.search(
+            r"disabledComponents:\s*(.*?)(?:\n\s*\w[^:\n]*:|\Z)",
+            output,
+            re.DOTALL,
+        )
+        return set() if match is None else set(match.group(1).split())
+
+    def meta_accounts_preflight(self) -> bool:
+        accounts = self.meta_accounts()
+        disabled = self.disabled_meta_authenticators()
+        already_clean = not accounts and set(META_AUTHENTICATOR_COMPONENTS) <= disabled
+        existing = self.adb_run(
+            ["shell", "cat", META_ACCOUNT_BACKUP_REMOTE], timeout=5
+        )
+        if existing.returncode != 0:
+            contents = "# portal-meta-accounts-before-v1\n" + "".join(
+                f"{account_type}\t{name}\n" for name, account_type in accounts
+            )
+            with tempfile.TemporaryDirectory(prefix="portal-meta-accounts-") as tmp:
+                local = pathlib.Path(tmp) / "accounts.tsv"
+                local.write_text(contents, encoding="utf-8")
+                self.adb_run(
+                    ["push", str(local), META_ACCOUNT_BACKUP_REMOTE],
+                    timeout=15,
+                    check=True,
+                )
+            self.adb_run(
+                ["shell", "chmod", "0600", META_ACCOUNT_BACKUP_REMOTE],
+                timeout=5,
+                check=True,
+            )
+        else:
+            contents = existing.stdout
+        host_backup = self.log_dir / "meta-accounts-before.tsv"
+        if not host_backup.exists():
+            host_backup.write_text(contents, encoding="utf-8")
+            host_backup.chmod(0o600)
+        print(
+            f"META_ACCOUNT_PREFLIGHT accounts={len(accounts)} "
+            f"authenticators_disabled={len(disabled & set(META_AUTHENTICATOR_COMPONENTS))} "
+            f"already_clean={int(already_clean)} backup={META_ACCOUNT_BACKUP_REMOTE}"
+        )
+        return already_clean
 
     def device_owner_preflight(self) -> bool:
         policy = self.adb_run(
@@ -345,6 +416,13 @@ class PortalProvisioner:
             environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
         if self.disable_updates:
             environment["GHOSTLOCK_OTA_BLOCK"] = "1"
+        if self.remove_meta_accounts:
+            environment.update(
+                {
+                    "GHOSTLOCK_REMOVE_META_ACCOUNTS": "1",
+                    "GHOSTLOCK_META_ACCOUNT_CTL_JAR": ACCOUNT_CTL_REMOTE,
+                }
+            )
         self.adb_run(
             ["shell", "am", "force-stop", "--user", "0", "com.facebook.aloha.analytics"],
             timeout=10,
@@ -385,7 +463,9 @@ class PortalProvisioner:
                 sys.stdout.flush()
                 output.write(line)
                 output.flush()
-                if self.disable_updates:
+                if self.remove_meta_accounts:
+                    success_marker = "Meta account removal "
+                elif self.disable_updates:
                     success_marker = "OTA block install "
                 elif self.device_owner:
                     success_marker = "kiosk device owner install "
@@ -778,6 +858,30 @@ class PortalProvisioner:
         self.verify_retained_platform()
         print("DEBLOAT_RESTORE_OK")
 
+    def verify_meta_accounts_removed(self) -> None:
+        accounts = self.meta_accounts()
+        if accounts:
+            raise ProvisionError(
+                "Meta accounts remain: "
+                + ", ".join(f"{account_type}/{name}" for name, account_type in accounts)
+            )
+        disabled = self.disabled_meta_authenticators()
+        missing = set(META_AUTHENTICATOR_COMPONENTS) - disabled
+        if missing:
+            raise ProvisionError(
+                "Meta authenticators became enabled: " + ", ".join(sorted(missing))
+            )
+        package_state = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+        ).stdout
+        if "package:com.facebook.alohaservices.alohausers" in package_state:
+            raise ProvisionError("alohausers package was disabled instead of its authenticators")
+        self.verify_retained_platform()
+        print(
+            "META_ACCOUNTS_REMOVED_OK accounts=0 authenticators=disabled "
+            "alohausers=enabled"
+        )
+
     def verify_requested_state(self) -> None:
         if self.audio:
             self.verify_watchdog()
@@ -790,6 +894,8 @@ class PortalProvisioner:
             self.verify_debloat()
         if self.restore_bloat:
             self.verify_debloat_restored()
+        if self.remove_meta_accounts:
+            self.verify_meta_accounts_removed()
 
     def verify_across_two_reboots(self, first_boot: str | None = None) -> None:
         if first_boot is None:
@@ -811,6 +917,9 @@ class PortalProvisioner:
         self.connect(wait_seconds=30)
         self.verify_target()
         already_owner = self.device_owner_preflight() if self.device_owner else False
+        already_meta_clean = (
+            self.meta_accounts_preflight() if self.remove_meta_accounts else False
+        )
         if self.debloat:
             self.apply_debloat()
         if self.restore_bloat:
@@ -820,13 +929,16 @@ class PortalProvisioner:
 
         privileged_action = self.audio or self.disable_updates or (
             self.device_owner and not already_owner
-        )
+        ) or (self.remove_meta_accounts and not already_meta_clean)
         if not privileged_action:
             self.verify_across_two_reboots()
             return
 
         if not self.skip_build:
-            build(build_audio=self.audio)
+            build(
+                build_audio=self.audio,
+                build_account=self.remove_meta_accounts,
+            )
         self.stage()
         clean_boot_id: str | None = None
         for attempt in range(1, self.attempts + 1):
@@ -862,10 +974,12 @@ class PortalProvisioner:
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
 
-def build(build_audio: bool) -> None:
+def build(build_audio: bool, build_account: bool) -> None:
     commands = [["make", "-C", str(ROOT / "exploit"), "-j2", "all"]]
     if build_audio:
         commands.append(["make", "-C", str(ROOT / "helper"), "native"])
+    if build_account:
+        commands.append(["make", "-C", str(ROOT / "exploit"), "account-ctl"])
     for command in commands:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
@@ -875,8 +989,8 @@ def build(build_audio: bool) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Provision selected Portal Go audio, Device Owner, OTA, and "
-            "debloat controls, then verify them across two reboots."
+            "Provision selected Portal Go audio, Device Owner, OTA, debloat, "
+            "and Meta-account controls, then verify them across two reboots."
         )
     )
     parser.add_argument("--serial", default="192.168.1.72:5555")
@@ -923,6 +1037,14 @@ def parse_args() -> argparse.Namespace:
         help="restore package states saved by the first --debloat run",
     )
     parser.add_argument(
+        "--remove-meta-accounts",
+        action="store_true",
+        help=(
+            "remove the four Portal Meta accounts locally and persistently "
+            "disable only their authenticator service components"
+        ),
+    )
+    parser.add_argument(
         "--log-dir",
         type=pathlib.Path,
         help="directory for exploit attempt logs (default: a timestamp under /tmp)",
@@ -937,6 +1059,7 @@ def parse_args() -> argparse.Namespace:
             args.disable_updates,
             args.debloat,
             args.restore_bloat,
+            args.remove_meta_accounts,
         )
     ):
         args.audio = True
@@ -958,6 +1081,7 @@ def main() -> int:
             disable_updates=args.disable_updates,
             debloat=args.debloat,
             restore_bloat=args.restore_bloat,
+            remove_meta_accounts=args.remove_meta_accounts,
             skip_build=args.skip_build,
         ).provision()
     except (ProvisionError, OSError, zipfile.BadZipFile) as exc:

@@ -19,6 +19,7 @@ The microphone array is processed by the DBMD7/STAX voice DSP before Android rec
 - `analysis/`: offset extraction and kernel analysis helpers
 - `tools/provision_portal.py`: action-based provisioner and two-reboot verifier
 - `tools/PortalAudioCtl.java`: direct Binder client for Meta's private audio service
+- `tools/PortalAccountCtl.java`: local Meta account and identity-database cleanup
 - `docs/findings.md`: chronological investigation record
 - `artifacts/`: manifest for large local firmware, kernel and crash artifacts that are intentionally excluded from Git
 
@@ -142,7 +143,38 @@ python3 tools/provision_portal.py \
 ```
 
 Action flags are independent. For a fresh device that needs every supported
-customization, combine `--audio --device-owner --disable-updates --debloat`.
+customization, combine them in one run:
+
+```sh
+python3 tools/provision_portal.py --serial 192.168.1.72:5555 \
+  --audio --device-owner --disable-updates --debloat --remove-meta-accounts
+```
+
+## Remove Meta accounts
+
+The account-removal action clears the four Portal-specific Android account
+types and prevents the firmware from creating them again:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial 192.168.1.72:5555 --remove-meta-accounts
+```
+
+The privileged action removes the AccountManager records and the matching
+rows in Meta's two local identity databases. It then disables only the four
+authenticator service components in
+`com.facebook.alohaservices.alohausers`. The package itself stays enabled so
+MobileConfig, the OTA override, camera support, and other shared Portal
+services continue to work.
+
+Before the first change, the provisioner records the account type/name
+inventory in `/data/local/tmp/portal-meta-accounts-before-v1.tsv` and copies
+it into the host log directory. This inventory does not contain tokens or a
+full database backup, so it is evidence of the former identities rather than
+an automatic restore point. The provisioner treats a later run as idempotent
+when no target accounts remain and all four authenticators are disabled. It
+still verifies that state, the retained package, both cameras, AI Service,
+Home, and WebView on two new boots.
 
 ## Current state
 
@@ -165,8 +197,7 @@ as Device Owner for user 0. Android loaded it as
 `ComponentInfo{me.jxl.kiosk_satellite/me.jxl.kiosk_satellite.KioskAdminReceiver}`
 and set `ro.device_owner=true`. That state survived normal reboots with boot
 IDs `31327449-dca9-47ab-919c-8608945b6eb1` and
-`73b06f93-35bc-47f5-bb99-ff324ca27c7e`. All four pre-existing Meta accounts
-remain installed and unchanged.
+`73b06f93-35bc-47f5-bb99-ff324ca27c7e`.
 
 On October 4, 2026, automatic firmware updates were disabled and verified
 after normal reboot to boot ID `5757afe1-3d74-46f9-a245-10239d30571e`.
@@ -182,5 +213,13 @@ two clean boots with IDs `c43f3691-0874-445b-bf85-1e55907194dc` and
 remained running. Both cameras, AI Service, Kiosk Satellite Home, Portal
 WebView, Device Owner, wireless ADB, the OTA block, and the audio watchdog
 remained healthy.
+
+On October 4, 2026, all four Portal-specific Meta accounts were removed and
+their four authenticator components were disabled. The shared `alohausers`
+package remained enabled. Verification boots
+`8db565c4-f7c2-40dc-9df5-aba6b4a98390` and
+`8762d7c6-1db1-400f-9559-8df8dc9f5f33` both reported zero target accounts,
+two camera devices, a running AI service, Kiosk Satellite Home, and the Portal
+WebView provider. SELinux returned to enforcing after the exploit boot.
 
 This code is tied to the fingerprint and kernel listed above. A mismatch can panic the device.

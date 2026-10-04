@@ -1318,3 +1318,43 @@ audio watchdog remained intact; the watchdog again repaired NS mode from 5 to
 Current result: the conservative debloat profile is active and reversible, and
 the retained camera, kiosk, WebView, audio, OTA, Device Owner, and ADB paths are
 healthy after two clean boots.
+
+127. Mapped all four Portal account providers to privileged services in
+`com.facebook.alohaservices.alohausers`: `com.facebook.aloha.sso`,
+`com.facebook.aloha.pl`, `com.facebook.aloha.hw`, and
+`com.facebook.aloha.privowner`. Meta's official device-owner removal path is
+coupled to a valid server-side proxy user, and the exported `CLEAR_ACCOUNT`
+receiver only removes the proxy SSO account. Disabling the entire package was
+rejected because it also provides MobileConfig and shared Portal services.
+
+128. Live database inspection found the local identity state in two actual
+files, rather than the schema label seen in decompiled code. `aloha_users_db`
+contains `aloha_proxy_user` and `aloha_device_owners`;
+`aloha_users_database` contains `device_accounts` and `device_owners`. The new
+`PortalAccountCtl` uses Android's hidden AccountManager Binder interface under
+the package UID, discovers these exact tables through `sqlite_master`, and
+deletes their rows transactionally. It scans unrelated database files
+read-only. The original account type/name inventory was saved mode 0600 at
+`/data/local/tmp/portal-meta-accounts-before-v1.tsv` before mutation.
+
+129. The identity service recreates proxy, platform-login, and hardware
+accounts immediately after a simple AccountManager removal. The completed
+sequence force-stops the service, removes the accounts and local rows, repeats
+the pass to close that race, disables only its four authenticator components,
+and performs one final system-UID AccountManager pass. The successful run
+removed three accounts left from prior research, cleared three database rows,
+removed one SSO account recreated during the first pass, disabled all four
+components, and finished with zero accounts. The private-owner account had
+already been removed by an earlier test and did not recreate.
+
+130. Two ordinary verification boots, IDs
+`8db565c4-f7c2-40dc-9df5-aba6b4a98390` and
+`8762d7c6-1db1-400f-9559-8df8dc9f5f33`, retained zero target accounts and all
+four disabled authenticators while the `alohausers` package remained enabled.
+Both cameras, AI Service, Kiosk Satellite Home, and Portal WebView passed on
+both boots, and SELinux was enforcing. A repeated provisioner run detected the
+completed state and skipped GhostLock, proving the action is idempotent.
+
+Current result: the Portal no longer has local Meta accounts and cannot
+recreate them through its account authenticators. Camera, kiosk, WebView,
+audio, OTA, Device Owner, and wireless ADB paths remain healthy.
