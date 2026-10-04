@@ -42,10 +42,33 @@ PORTAL_AUDIO_CTL_OK id=3001 before=NaN requested=0.0 after=0.0 match=true
 PORTAL_AUDIO_CTL_OK id=4001 before=5.0 requested=0.0 after=0.0 match=true
 ```
 
-This disables the separate residual-echo suppression mode as well as AEC for
-the active audio-service lifetime. Acoustic A/B capture and behavior after an
-audio-service restart remain to be measured. The audio settings are not yet
-applied automatically after a device reboot.
+This disables the separate residual-echo suppression mode as well as AEC.
+
+Persistence is now installed in the AI service's private native-library
+directory. The guaranteed startup chain is
+`libaddressspace.so -> libcoldstart.so -> libcoldstart_1.so`. The last library's
+equal-length `libdl.so` dependency string is patched to `libpa.so`, which loads
+the native watchdog while preserving `libdl.so` as one of the watchdog's own
+dependencies. The original library is backed up alongside it as
+`libcoldstart_1.portal-original.so`.
+
+The watchdog retries service acquisition after failures, reads and verifies
+both parameters, and checks them once per second during startup or after a
+correction, then every five seconds in steady state. It only logs corrections,
+failures and recovery rather than filling logcat on every healthy pass. On
+October 4, 2026, it loaded automatically on two successive boots:
+
+```
+boot 30d9a2c6-9bd2-4ec7-bd6c-88ccf915f266: 3001=0, 4001=0
+boot 72d69b44-bd45-4ba6-8494-da4515f396ee: 3001=0, 4001=0
+```
+
+On the second recorded boot Meta changed NS mode back to `5`; the next
+watchdog pass observed `before=5 after=0 ok=1`. The initial watchdog build had
+also repaired this rewrite on both of its verification boots. This verifies
+that the helper handles both reboot persistence and later parameter rewrites.
+The obsolete ordinary APK helper was removed after native persistence was
+verified. Acoustic A/B capture remains to be measured.
 
 An optional privileged action writes `persist.adb.tcp.port=5555` directly to
 Android's protobuf persistent-property store and sets the live

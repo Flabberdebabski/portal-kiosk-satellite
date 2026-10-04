@@ -1,0 +1,44 @@
+SDK ?= /home/jxlarrea/android-sdk
+NDK ?= $(SDK)/ndk/28.2.13676358
+TOOLCHAIN ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64
+NATIVE_CC := $(TOOLCHAIN)/bin/armv7a-linux-androideabi29-clang
+BUILD_TOOLS ?= $(SDK)/build-tools/37.0.0
+ANDROID_JAR ?= $(SDK)/platforms/android-36/android.jar
+BUILD := build
+CLASSES := $(BUILD)/classes
+DEX := $(BUILD)/dex
+UNSIGNED := $(BUILD)/portal-audio-helper-unsigned.apk
+ALIGNED := $(BUILD)/portal-audio-helper-aligned.apk
+APK := $(BUILD)/portal-audio-helper.apk
+PERSIST_SO := $(BUILD)/libportal_audio_persist.so
+KEYSTORE ?= /home/jxlarrea/.android/debug.keystore
+SOURCES := $(shell find src -name '*.java' -type f)
+
+.PHONY: all clean native
+all: $(APK) $(PERSIST_SO)
+
+native: $(PERSIST_SO)
+
+$(PERSIST_SO): native/portal_audio_persist.c
+	mkdir -p $(BUILD)
+	$(NATIVE_CC) --target=armv7a-linux-androideabi29 \
+		--sysroot=$(TOOLCHAIN)/sysroot -O2 -fPIC -fvisibility=hidden \
+		-shared -Wl,-soname,libpa.so -Wl,--gc-sections \
+		$< -o $@ -pthread -lbinder_ndk -llog -ldl
+
+$(APK): AndroidManifest.xml $(SOURCES)
+	mkdir -p $(BUILD) $(CLASSES) $(DEX)
+	$(BUILD_TOOLS)/aapt package -f -M AndroidManifest.xml \
+		-I $(ANDROID_JAR) -F $(UNSIGNED)
+	javac -source 8 -target 8 -cp $(ANDROID_JAR) -d $(CLASSES) $(SOURCES)
+	cd $(CLASSES) && jar cf ../portal-audio-helper-classes.jar .
+	$(BUILD_TOOLS)/d8 --min-api 24 --output $(DEX) \
+		$(BUILD)/portal-audio-helper-classes.jar
+	cd $(DEX) && $(BUILD_TOOLS)/aapt add ../portal-audio-helper-unsigned.apk classes.dex
+	$(BUILD_TOOLS)/zipalign -f 4 $(UNSIGNED) $(ALIGNED)
+	$(BUILD_TOOLS)/apksigner sign --ks $(KEYSTORE) --ks-pass pass:android \
+		--key-pass pass:android --out $(APK) $(ALIGNED)
+	$(BUILD_TOOLS)/apksigner verify --verbose $(APK)
+
+clean:
+	rm -rf $(BUILD)

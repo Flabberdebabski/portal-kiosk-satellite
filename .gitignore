@@ -1,6 +1,8 @@
 # Build outputs
 exploit/build/*
 !exploit/build/.gitkeep
+helper/build/*
+!helper/build/.gitkeep
 exploit/portal-terry-*
 *.o
 *.so
@@ -25,3 +27,6 @@ artifacts/*
 *.log
 __pycache__/
 *.pyc
+
+.remember
+AGENTS.md

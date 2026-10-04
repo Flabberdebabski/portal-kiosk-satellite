@@ -1150,3 +1150,54 @@ persistent property alone controls startup here.
 Current result: hardware AEC and residual-echo suppression are disabled for
 the active audio-service lifetime. Wireless ADB is persistent across reboot.
 Boot-time reapplication of the audio settings and an acoustic A/B test remain.
+
+111. Replaced the one-shot Java control path with a native 32-bit Binder
+client linked against `libbinder_ndk`. The privileged process successfully
+called the same private manager and audio transactions without starting a JVM:
+parameter 3001 read back `0.0`, parameter 4001 changed from `5.0` to `0.0`, and
+both reported `match=1`. This removes `app_process`, APK permissions and Java
+process startup from the time-critical post-exploit path.
+
+112. A privileged snapshot of the installed AI service established its native
+startup chain. `libaddressspace.so` requires `libcoldstart.so`, which requires
+`libcoldstart_1.so`. The last file is 57,256 bytes and has a unique
+`libdl.so\0` dynamic-string slot at file offset `0x18d5`. Replacing it with the
+equal-length `libpa.so\0` name adds the watchdog to a library that is loaded on
+every AI service start. The watchdog itself requires `libdl.so`, preserving the
+original dependency transitively. The installer copies the unmodified library
+to `libcoldstart_1.portal-original.so` before changing the live file.
+
+113. Installed the native watchdog as
+`/data/user/0/com.facebook.portal.aiservice/lib-compressed/libpa.so`. The
+installing privileged process verified the dependency patch and synced both
+files before reboot. On boot `315bea69-7e08-4bdc-96ce-a0ba033b48e7`, PID 3526
+logged `persistent audio watchdog started`, then verified parameter 3001 as
+zero and parameter 4001 as zero. Meta subsequently reset parameter 4001 to
+`5`; five seconds later the watchdog logged `before=5 after=0 ok=1`.
+
+114. Cleared logcat and performed a second normal reboot to boot ID
+`9691ab7e-a9c1-4938-8455-567ea96ab6df`. A fresh AI service process, PID 3418,
+again loaded the watchdog without host action. It set both parameters to zero,
+then caught and repaired another `NS_MODE` reset from `5` to `0`. The earlier
+ordinary APK helper was uninstalled while the native watchdog continued to
+run. `tools/install_audio_persistence.py` now packages the exact successful
+exploit settings, checks the firmware fingerprint, builds and stages both
+binaries, retries nondeterministic reclaim misses, and verifies two separate
+post-install boots.
+
+Current result: hardware AEC and residual-echo suppression are disabled
+system-wide and automatically restored after reboot, audio-service restart,
+or a later parameter rewrite. Wireless ADB is also persistent. The remaining
+measurement task is an acoustic A/B capture with an independent speech source.
+
+115. Hardened the deployed watchdog after observing that the first build wrote
+two healthy messages to logcat every five seconds. The current build checks
+once per second for 30 clean passes after startup or any correction, then every
+five seconds in steady state. It logs only startup, corrections, failures and
+recovery. The idempotent installer replaced `libpa.so` while recognizing the
+already patched dependency at offset `0x18d5`. Fresh processes verified both
+parameters on boot IDs `30d9a2c6-9bd2-4ec7-bd6c-88ccf915f266` and
+`72d69b44-bd45-4ba6-8494-da4515f396ee`. On the second boot Meta reset NS mode
+to `5` six seconds after initial verification; the startup cadence corrected it
+to `0` on the following pass. The live AI service is PID 3511 and the ordinary
+APK helper remains uninstalled.
