@@ -1561,3 +1561,19 @@ Current result: `--shizuku` provides unattended, device-local Shizuku shell
 privileges after reboot without rerunning GhostLock and without an always-on
 host. It does not provide persistent UID-0 root. The paired
 `--remove-shizuku` action removes its key and installed packages.
+
+151. A Kiosk Satellite `2026.10.7` update submitted through the working
+Shizuku server failed with `INSTALL_FAILED_VERIFICATION_FAILURE`. The live
+logs proved that Shizuku staged the expected package and invoked `pm install`
+as shell, after which `com.facebook.appverifier` compared the KS certificate
+against eight Meta certificates and logged `App certificate rejected`.
+Setting the independent Android global `package_verifier_enable` value to `0`
+allowed a non-Meta helper reinstall and the KS update while the Meta verifier
+package itself stayed enabled. The provisioner now exposes this as
+`--allow-app-updates`, stores the prior value for
+`--restore-app-verifier`, includes it in `--profile kiosk`, reports it in
+`--status`, and verifies it across two reboots without requiring Shizuku or
+the kernel exploit. It passed boots
+`be358d6b-4a95-47be-aa3d-e5ce0cb01b90` and
+`63da4d22-c086-4f25-b410-18bdae844e5c`; KS reported `2026.10.7`, and
+`shizuku_server` returned as shell after the final boot.

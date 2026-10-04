@@ -243,6 +243,31 @@ desired kiosk state on boots `0e5edea7-bb6d-4193-b050-dc6717236160` and
 gate was false from `source: OVERRIDE`, and the unattended presence verifier
 passed. SELinux was enforcing after every verification reboot.
 
+## Third-party application updates
+
+Meta's registered package-verification agent rejects correctly signed
+non-Meta APKs. A Kiosk Satellite `2026.10.7` self-update reached Package
+Manager through a healthy Shizuku server, but `com.facebook.appverifier`
+compared the KS certificate with Meta's private certificate set, logged
+`App certificate rejected`, and returned
+`INSTALL_FAILED_VERIFICATION_FAILURE`.
+
+The independent `--allow-app-updates` action saves the current
+`package_verifier_enable` value and sets it to `0`. This leaves Meta's verifier
+package installed and enabled while preventing Android from invoking its
+obsolete allowlist. Android's normal matching-signature and version checks
+remain active. The action works with the normal package installer, Device
+Owner, the KS update helper, and Shizuku. It is included in `--profile kiosk`
+but does not install or require Shizuku. `--restore-app-verifier` restores the
+exact saved setting.
+
+An already-installed non-Meta helper then reinstalled successfully with no
+Facebook verifier event. The setting survived clean verification boots
+`be358d6b-4a95-47be-aa3d-e5ce0cb01b90` and
+`63da4d22-c086-4f25-b410-18bdae844e5c`. Kiosk Satellite was updated to
+`2026.10.7`, Meta's verifier package remained enabled, and the device-local
+Shizuku helper started `shizuku_server` as shell after the final reboot.
+
 ## Device-local Shizuku
 
 The optional `--shizuku` action installs the pinned official Shizuku

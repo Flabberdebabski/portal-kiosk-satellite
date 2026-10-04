@@ -12,7 +12,8 @@ Meta's firmware do not normally allow.
   SELinux enforcing instead of leaving a general root daemon running.
 - **[Complete kiosk profile](#6-run-the-provisioner):** applies the tested
   audio, Device Owner, update-blocking, debloat, account-removal, and presence
-  settings with one command, reducing setup time and configuration mistakes.
+  settings plus third-party app updates with one command, reducing setup time
+  and configuration mistakes.
 - **[System-wide hardware AEC and noise-suppression control](#1-disable-hardware-echo-cancellation-and-noise-suppression):**
   stops the Portal's voice DSP from suppressing microphone input while its
   speakers play, improving simultaneous playback and listening for every
@@ -39,19 +40,23 @@ Meta's firmware do not normally allow.
   workloads while retaining the LED-free person-detection log consumed by
   Kiosk Satellite. The tested profile cut AIService CPU use by roughly half
   and includes an exact rollback.
-- **[Device-local Shizuku startup](#8-install-shizuku-with-automatic-startup):**
+- **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
   installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
   manager and starts its service with Android's ADB-shell identity after every
   reboot, giving compatible apps privileged APIs without rerunning the root
   exploit or leaving another computer online.
+- **[Persistent third-party app updates](#8-allow-kiosk-satellite-and-third-party-app-updates):**
+  turns off Meta's obsolete certificate allowlist so Kiosk Satellite and other
+  non-Meta apps can update through Android, Device Owner, an update helper, or
+  Shizuku while Android still enforces package signatures and downgrade rules.
 - **[Filtering Private DNS](#7-use-a-filtering-private-dns-resolver):** routes
   DNS through a user-selected DNS-over-TLS resolver, allowing unwanted Meta
   endpoints to be filtered without modifying system certificates or
   installing a broad root firewall. The original DNS settings can be restored.
 - **[Read-only device status](#status-report):** reports target compatibility,
   SELinux, Kiosk Satellite, Device Owner, audio, OTA, debloat, account,
-  presence, DNS, and provisioning-manifest state without exploiting or
-  rebooting the device.
+  presence, DNS, third-party app updates, Shizuku, and provisioning-manifest
+  state without exploiting or rebooting the device.
 - **[Dry-run planning](#dry-run-planning):** previews actions, required
   binaries and host tools, exploit use, reboot count, and current state without
   changing the Portal.
@@ -275,9 +280,10 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
 ```
 
 The `kiosk` profile expands to the audio, Device Owner, update blocking,
-debloat, Meta-account removal, and presence optimization actions. You may add
-`--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering resolver,
-or `--shizuku` when apps on the Portal need Shizuku's shell-level APIs.
+debloat, Meta-account removal, presence optimization, and third-party app
+update actions. You may add `--privacy-dns HOSTNAME` when you operate a
+DNS-over-TLS filtering resolver, or `--shizuku` when apps on the Portal need
+Shizuku's shell-level APIs.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. A completed run ends with `PROVISION_OK` and two different boot IDs.
@@ -300,6 +306,7 @@ available rollback.
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
+| Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
 | Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
 
 Flags can be combined in one command. Combining privileged actions performs
@@ -497,7 +504,34 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-privacy-dns
 ```
 
-### 8. Install Shizuku with automatic startup
+### 8. Allow Kiosk Satellite and third-party app updates
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --allow-app-updates
+```
+
+Meta registers `com.facebook.appverifier` as Android's package-verification
+agent. It rejects APKs whose certificates are outside Meta's private allowlist,
+including correctly signed Kiosk Satellite releases, with
+`INSTALL_FAILED_VERIFICATION_FAILURE`. This action saves the existing Android
+setting and sets `package_verifier_enable=0`. The setting survives reboot, and
+the provisioner verifies it on two separate boots.
+
+This action is independent of Shizuku. It allows updates installed through the
+normal Android confirmation screen, Kiosk Satellite Device Owner, the optional
+update helper, or Shizuku. Android continues to require a matching application
+signature for updates and continues to reject version downgrades. Meta's
+verifier package remains installed and enabled.
+
+Restore the saved setting with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-app-verifier
+```
+
+### 9. Install Shizuku with automatic startup
 
 ```sh
 python3 tools/provision_portal.py \
@@ -507,9 +541,11 @@ python3 tools/provision_portal.py \
 This downloads the pinned official Shizuku release, verifies its SHA-256
 digest, and installs it with a small Portal boot helper. Meta's required APK
 certificate verifier accepts only Meta-approved signing certificates, so the
-provisioner temporarily disables that verifier around the two local installs,
-restores its original state, waits for Package Manager to save it, and checks
-the result after reboot.
+provisioner temporarily disables the verifier package around the two local
+installs, restores the package's original enabled state, waits for Package
+Manager to save it, and checks the result after reboot. The separate
+`--allow-app-updates` action controls whether later third-party updates are
+accepted.
 
 The Portal runs Android 10, where upstream Shizuku cannot automatically start
 ADB mode after boot. The helper solves that limitation entirely on the device:

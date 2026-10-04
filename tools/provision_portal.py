@@ -35,6 +35,7 @@ SHIZUKU_HELPER_PACKAGE = "dev.portal.shizukuhelper"
 SHIZUKU_HELPER_LOCAL = ROOT / "shizuku-helper/build/portal-shizuku-helper.apk"
 SHIZUKU_KEY_REMOTE = "/data/local/tmp/portal-shizuku-adbkey.pub"
 SHIZUKU_SAVED_KEY_REMOTE = "/data/local/tmp/portal-shizuku-adbkey-v1.pub"
+APP_VERIFIER_BACKUP_REMOTE = "/data/local/tmp/portal-package-verifier-before-v1"
 SHIZUKU_VERSION = "13.6.0.r1086.2650830c"
 SHIZUKU_APK_NAME = "shizuku-v13.6.0.r1086.2650830c-release.apk"
 SHIZUKU_APK_URL = (
@@ -113,6 +114,8 @@ class PortalProvisioner:
         restore_presence_profile: bool = False,
         privacy_dns: str | None = None,
         restore_privacy_dns: bool = False,
+        allow_app_updates: bool = False,
+        restore_app_verifier: bool = False,
         shizuku: bool = False,
         remove_shizuku: bool = False,
         shizuku_apk: pathlib.Path | None = None,
@@ -137,6 +140,8 @@ class PortalProvisioner:
         self.restore_presence_profile = restore_presence_profile
         self.privacy_dns = privacy_dns
         self.restore_privacy_dns = restore_privacy_dns
+        self.allow_app_updates = allow_app_updates
+        self.restore_app_verifier = restore_app_verifier
         self.shizuku = shizuku
         self.remove_shizuku = remove_shizuku
         self.shizuku_apk = shizuku_apk
@@ -311,6 +316,8 @@ class PortalProvisioner:
             "optimize_presence",
             "restore_presence_profile",
             "restore_privacy_dns",
+            "allow_app_updates",
+            "restore_app_verifier",
             "shizuku",
             "remove_shizuku",
         ):
@@ -484,6 +491,9 @@ class PortalProvisioner:
         )
         shizuku_dump = shell("dumpsys", "package", SHIZUKU_PACKAGE)
         shizuku_version = re.search(r"\bversionName=([^\s]+)", shizuku_dump)
+        package_verifier_setting = shell(
+            "settings", "get", "global", "package_verifier_enable", timeout=5
+        )
         process_list = shell("ps", "-A")
         shizuku_process = next(
             (line for line in process_list.splitlines() if "shizuku_server" in line),
@@ -599,6 +609,19 @@ class PortalProvisioner:
                 ).returncode
                 == 0,
             },
+            "app_updates": {
+                "meta_verifier_package_enabled": (
+                    "com.facebook.appverifier" in installed
+                    and "com.facebook.appverifier" not in disabled
+                ),
+                "package_verifier_setting": (
+                    None
+                    if package_verifier_setting == "null"
+                    else package_verifier_setting
+                ),
+                "third_party_updates_allowed": package_verifier_setting == "0",
+                "backup_present": exists(APP_VERIFIER_BACKUP_REMOTE),
+            },
             "shizuku": {
                 "installed": SHIZUKU_PACKAGE in installed,
                 "version_name": (
@@ -647,6 +670,7 @@ class PortalProvisioner:
         accounts = status.get("meta_accounts", {})
         presence = status.get("presence", {})
         privacy = status.get("privacy_dns", {})
+        app_updates = status.get("app_updates", {})
         shizuku = status.get("shizuku", {})
         current = {
             "audio": audio.get("state") if isinstance(audio, dict) else None,
@@ -660,6 +684,7 @@ class PortalProvisioner:
             ),
             "presence": presence.get("state") if isinstance(presence, dict) else None,
             "privacy_dns": privacy if isinstance(privacy, dict) else None,
+            "app_updates": app_updates if isinstance(app_updates, dict) else None,
             "shizuku": shizuku if isinstance(shizuku, dict) else None,
         }
         required_outputs = []
@@ -720,6 +745,7 @@ class PortalProvisioner:
                 DEBLOAT_BACKUP_REMOTE,
                 META_ACCOUNT_BACKUP_REMOTE,
                 PRIVACY_BACKUP_REMOTE,
+                APP_VERIFIER_BACKUP_REMOTE,
                 "/data/local/tmp/portal-ota-backup",
                 "/data/local/tmp/portal-presence-backup",
                 "/data/local/tmp/portal-device-owner-backup",
@@ -881,6 +907,93 @@ class PortalProvisioner:
             )
         action = "restored" if self.restore_privacy_dns else "configured"
         print(f"PRIVACY_DNS_OK action={action} mode={mode} hostname={hostname}")
+
+    def read_app_verifier_backup(self) -> str:
+        result = self.adb_run(
+            ["shell", "cat", APP_VERIFIER_BACKUP_REMOTE], timeout=5, check=True
+        )
+        try:
+            backup = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ProvisionError(f"invalid app-verifier backup: {exc}") from exc
+        if not isinstance(backup, dict) or backup.get("schema") != 1:
+            raise ProvisionError("unrecognized app-verifier backup")
+        value = backup.get("package_verifier_enable")
+        if value not in {"0", "1", "null"}:
+            raise ProvisionError("app-verifier backup is incomplete")
+        return value
+
+    def allow_third_party_app_updates(self) -> None:
+        existing = self.adb_run(
+            ["shell", "test", "-f", APP_VERIFIER_BACKUP_REMOTE], timeout=5
+        )
+        if existing.returncode != 0:
+            original = self.adb_run(
+                ["shell", "settings", "get", "global", "package_verifier_enable"],
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+            if original not in {"0", "1", "null"}:
+                raise ProvisionError(
+                    f"unexpected package_verifier_enable value: {original!r}"
+                )
+            backup = {"schema": 1, "package_verifier_enable": original}
+            with tempfile.TemporaryDirectory(prefix="portal-app-verifier-") as temp:
+                local = pathlib.Path(temp) / "app-verifier.json"
+                local.write_text(json.dumps(backup, indent=2) + "\n")
+                self.adb_run(
+                    ["push", str(local), APP_VERIFIER_BACKUP_REMOTE],
+                    timeout=15,
+                    check=True,
+                )
+            self.adb_run(
+                ["shell", "chmod", "0600", APP_VERIFIER_BACKUP_REMOTE],
+                timeout=5,
+                check=True,
+            )
+        self.adb_run(
+            ["shell", "settings", "put", "global", "package_verifier_enable", "0"],
+            timeout=10,
+            check=True,
+        )
+        self.adb_run(["shell", "sync"], timeout=10, check=True)
+        self.verify_app_verifier_setting()
+
+    def restore_app_verifier_setting(self) -> None:
+        original = self.read_app_verifier_backup()
+        command = [
+            "shell",
+            "settings",
+            "delete" if original == "null" else "put",
+            "global",
+            "package_verifier_enable",
+        ]
+        if original != "null":
+            command.append(original)
+        self.adb_run(command, timeout=10, check=True)
+        self.adb_run(["shell", "sync"], timeout=10, check=True)
+        self.verify_app_verifier_setting()
+
+    def verify_app_verifier_setting(self) -> None:
+        actual = self.adb_run(
+            ["shell", "settings", "get", "global", "package_verifier_enable"],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        expected = "0"
+        action = "updates-allowed"
+        if self.restore_app_verifier:
+            expected = self.read_app_verifier_backup()
+            action = "restored"
+        if actual != expected:
+            raise ProvisionError(
+                "package verifier setting did not persist: "
+                f"actual={actual!r} expected={expected!r}"
+            )
+        print(
+            f"APP_UPDATES_OK action={action} "
+            f"package_verifier_enable={actual}"
+        )
 
     def resolve_shizuku_apk(self) -> pathlib.Path:
         if self.shizuku_apk is not None:
@@ -1200,6 +1313,8 @@ class PortalProvisioner:
             "restore_presence_profile",
             "privacy_dns",
             "restore_privacy_dns",
+            "allow_app_updates",
+            "restore_app_verifier",
             "shizuku",
             "remove_shizuku",
         }
@@ -2160,6 +2275,8 @@ class PortalProvisioner:
             self.verify_presence_runtime(require_profile=False)
         if self.privacy_dns or self.restore_privacy_dns:
             self.verify_privacy_dns()
+        if self.allow_app_updates or self.restore_app_verifier:
+            self.verify_app_verifier_setting()
         if self.shizuku:
             self.verify_shizuku()
         if self.remove_shizuku:
@@ -2220,6 +2337,10 @@ class PortalProvisioner:
             self.apply_privacy_dns()
         if self.restore_privacy_dns:
             self.restore_private_dns()
+        if self.allow_app_updates:
+            self.allow_third_party_app_updates()
+        if self.restore_app_verifier:
+            self.restore_app_verifier_setting()
 
         privileged_action = (
             self.audio
@@ -2370,6 +2491,23 @@ def parse_args() -> argparse.Namespace:
             f"the pinned official {SHIZUKU_VERSION} release"
         ),
     )
+    app_update_group = parser.add_mutually_exclusive_group()
+    app_update_group.add_argument(
+        "--allow-app-updates",
+        action="store_true",
+        help=(
+            "persistently disable Meta's certificate allowlist so Kiosk "
+            "Satellite and other non-Meta apps can update"
+        ),
+    )
+    app_update_group.add_argument(
+        "--restore-app-verifier",
+        action="store_true",
+        help=(
+            "restore package_verifier_enable to the value saved by the first "
+            "--allow-app-updates run"
+        ),
+    )
     update_group = parser.add_mutually_exclusive_group()
     update_group.add_argument(
         "--disable-updates",
@@ -2476,6 +2614,7 @@ def parse_args() -> argparse.Namespace:
                 (args.enable_updates, "--enable-updates"),
                 (args.restore_bloat, "--restore-bloat"),
                 (args.restore_presence_profile, "--restore-presence-profile"),
+                (args.restore_app_verifier, "--restore-app-verifier"),
             )
             if enabled
         ]
@@ -2490,6 +2629,7 @@ def parse_args() -> argparse.Namespace:
         args.debloat = True
         args.remove_meta_accounts = True
         args.optimize_presence = True
+        args.allow_app_updates = True
     selected = any(
         (
             args.audio,
@@ -2504,6 +2644,8 @@ def parse_args() -> argparse.Namespace:
             args.restore_presence_profile,
             args.privacy_dns,
             args.restore_privacy_dns,
+            args.allow_app_updates,
+            args.restore_app_verifier,
             args.shizuku,
             args.remove_shizuku,
         )
@@ -2548,6 +2690,8 @@ def main() -> int:
             restore_presence_profile=args.restore_presence_profile,
             privacy_dns=args.privacy_dns,
             restore_privacy_dns=args.restore_privacy_dns,
+            allow_app_updates=args.allow_app_updates,
+            restore_app_verifier=args.restore_app_verifier,
             shizuku=args.shizuku,
             remove_shizuku=args.remove_shizuku,
             shizuku_apk=args.shizuku_apk,
