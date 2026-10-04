@@ -692,3 +692,14 @@ See [the current status](docs/current-status.md) for implementation evidence
 and [the investigation log](docs/findings.md) for the complete research
 history. This project currently has no generic exploit path for unlisted Portal
 models or firmware builds.
+
+## Support the project
+
+If this project breathed new life into your Meta Portal, consider supporting
+my work through [Buy Me a Coffee](https://buymeacoffee.com/jxlarrea). Your
+support helps me obtain more Portal models, test additional firmware, and keep
+improving the tools that make these devices useful again.
+
+<p align="center">
+  <a href="https://buymeacoffee.com/jxlarrea"><img src="https://img.shields.io/badge/Buy%20Me%20A%20Coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me A Coffee"></a>
+</p>
