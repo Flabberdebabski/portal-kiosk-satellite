@@ -61,6 +61,12 @@ KGSL assembles these 16 KiB buffers from 8 KiB allocation chunks on this
 driver family. The watcher therefore checks the constrained word's in-page
 offset in all four virtual page slots, so a split or rearranged target page is
 observable even when it cannot yet hold the complete fake object graph.
+That all-slot scan also missed with 64 MiB allocated across both stages, which
+shows the target remains in the `mm_struct` cache. An optional cache-cycle now
+refills the old partial slabs with fresh address spaces, moves allocation to
+later slabs, and frees the fresh objects in order. The later frees overflow
+CPU partial storage after the target becomes an early empty slab; KGSL then
+runs at this additional discard boundary.
 
 After that checkpoint, the remaining sequence is:
 

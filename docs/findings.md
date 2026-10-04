@@ -1010,3 +1010,15 @@ different virtual slot. The fast watcher now checks eight bytes into every
 the preceding owner word is zero.
 
 Current result: hardware echo cancellation remains enabled.
+
+100. The all-slot KGSL watcher still reported zero after the two-stage 64 MiB
+reclaim, ruling out both a complete buffer collision and a split target-page
+collision. Linux 4.9 SLUB can retain an empty slab as the current CPU slab or
+on CPU/node partial lists, where no buddy allocator can reach it. A new
+optional cache-cycle phase refills old `mm_struct` partial slabs with fresh
+address spaces, advances allocation into later slabs, then releases the fresh
+objects in allocation order. This makes the target an early empty slab and
+uses later frees to overflow CPU partial storage before KGSL's next reclaim
+stage.
+
+Current result: hardware echo cancellation remains enabled.
