@@ -1115,3 +1115,38 @@ compact fake operations table at offsets `0x1000`, `0x3000`, `0x5000`, and
 address.
 
 Current result: hardware echo cancellation remains enabled.
+
+109. The tiled FOPS collision route completed arbitrary kernel read/write on
+the exact Portal Go build. The configfs primitive found the exploit process
+task, changed all credential IDs to zero, installed full capability masks and
+changed `selinux_enforcing` from 1 to 0. The resulting process reported UID 0
+and EUID 0. A direct Java Binder client then obtained
+`com.facebook.alohasdk.IAudioService` through manager transaction 3 and issued
+audio transaction 4 with `(3001, 0.0)`. Transaction 3 readback returned `0.0`:
+`PORTAL_AUDIO_CTL_OK id=3001 before=NaN requested=0.0 after=0.0`.
+The device remained on the same boot and responsive after the call. Ordinary
+ADB stayed UID 2000 and continued to receive the expected `PLATFORM_AUDIO`
+permission denial, confirming the successful call came from the temporary
+root process. `tools/PortalAudioCtl.java` preserves the exact protocol.
+
+Current result: hardware AEC is disabled for the active audio-service
+lifetime. Persistence across an audio-service or device restart and acoustic
+behavior with the separate residual-echo NS bit still require validation.
+
+110. A combined privileged-action run confirmed the complete service-level
+audio change and persistent wireless ADB. `AEC_ENABLE` 3001 read back `0.0`;
+`NS_MODE` 4001 changed from `5.0` to `0.0` and also read back `0.0`. Before
+launching the Java Binder client, the root process appended the protobuf record
+`persist.adb.tcp.port=5555` to `/data/property/persistent_properties`, preserving
+the file metadata and SELinux label and committing it with an atomic rename.
+The device then rebooted from boot ID
+`2b34b396-83d4-41e0-8f2b-382e202bbfb9` to
+`ff0bcffb-66d9-49a0-bfdc-06713ffa00fb`. Wireless ADB returned without
+`adb tcpip` or another device-side enable command, and the new boot reported
+`persist.adb.tcp.port=5555`, `adb_enabled=1`, and SELinux enforcing. The live
+`service.adb.tcp.port` property was empty after boot, demonstrating that the
+persistent property alone controls startup here.
+
+Current result: hardware AEC and residual-echo suppression are disabled for
+the active audio-service lifetime. Wireless ADB is persistent across reboot.
+Boot-time reapplication of the audio settings and an acoustic A/B test remain.

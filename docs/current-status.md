@@ -1,96 +1,60 @@
 # Current exploit status
 
 The Portal Go's installed 4.9.227 kernel is vulnerable to GhostLock. The
-build-specific port now has a deterministic stale `rt_mutex_waiter` copy from
-native `sendmmsg`, a verified priority-120 real waiter on `proc_uid_lock`, and
-a working constrained kernel write through the vulnerable dequeue path.
+build-specific route now completes the full chain on firmware
+`5051355900018050`: a native `sendmmsg` stack copy supplies the stale
+`rt_mutex_waiter`, the target order-3 `mm_struct` slab is reclaimed by a UNIX
+stream allocation, and the constrained `rb_erase` write redirects ashmem file
+operations to a controlled table.
 
-The current boot's randomized `_text` can be recovered without the fragile
-first exploit stage. Android's bundled `simpleperf` records raw kernel PCs;
-the frequent `el0_svc_naked+0x34` sample identifies the runtime base. The
-exploit accepts that verified address through `GHOSTLOCK_KASLR_BASE` and uses
-canonical KASLR-adjusted addresses for `proc_uid_lock` and write targets.
+The resulting configfs primitive provides arbitrary kernel read/write. It has
+successfully located the exploit process in the task list, changed its UID,
+EUID and FSUID to zero, installed full capability masks, and changed
+`selinux_enforcing` from 1 to 0. The active trigger keeps the damaged
+`proc_uid_lock` gates alive; releasing them can still panic and reboot the
+device, so this remains a temporary per-boot root route.
 
-The constrained write is proven. A held diagnostic redirected the boot-ID
-sysctl data pointer to the reclaimed-page candidate and read back its first 16
-bytes. The scheduler operation returned zero before the later legitimate
-`run-as` waiter panicked in `rb_next()` while traversing the deliberately
-damaged mutex tree.
+The current boot's randomized `_text` is recovered with Android's bundled
+`simpleperf`. A `cpu-clock` callchain address ending in `0x3d7e` is
+`el0_svc_naked+0x34`; subtracting `0x3d7e` gives the runtime kernel base passed
+through `GHOSTLOCK_KASLR_BASE`.
 
-The constrained write did not corrupt a successfully reclaimed fake table.
-The held socket diagnostic found no modified payload among all queued data.
-Exact allocator analysis explains why: the UNIX socket task-fragment cache
-allocates order-3 pages, with an order-0 fallback, while the freed `mm_struct`
-slab is order-2. A 16 KiB send consumes half an order-3 allocation; it does not
-request an order-2 page.
+Meta's installed Binder stubs establish the exact private audio protocol:
 
-The replacement route uses `/dev/kgsl-3d0`. A shell-accessible
-`KGSL_IOC_GPUMEM_ALLOC_ID` request for 16 KiB with alignment exponent 14
-returns a writable 16 KiB mapping. The exact driver takes the no-pool path on
-this device and calls `alloc_pages(..., 2)`, matching the target slab. The
-exploit now drains and retains KGSL order-2 allocations before freeing the
-target, immediately allocates and maps the reclaim set after the free, copies
-the fake object graph into every mapping, and inspects offset `0x1008` after
-the scheduler write. A clean collision is therefore directly observable
-before any ashmem open.
+- Service manager: `com.facebook.IAudioServiceManager`
+- Manager descriptor: `com.facebook.alohasdk.IAudioServiceManager`
+- Manager transaction 3: `getAudioService(connection)`
+- Audio descriptor: `com.facebook.alohasdk.IAudioService`
+- Audio transaction 3: `getAudioProcessingParam(int)`
+- Audio transaction 4: `setAudioProcessingParam(int, float)`
 
-The first corrected sendmmsg run returned zero from `sched_setattr`. It then
-spent 0.38 seconds on the obsolete socket scan and the finite ext4 gate expired
-before the KGSL verifier ran. A second run with a 512 MiB gate established that
-the scheduler syscall itself remains blocked until the gate expires, so a
-larger file delays both events without creating post-write time. The scheduler
-consumer now scans the already populated KGSL mappings immediately on return,
-before any syscall, log operation, or cross-thread wakeup. Its return line
-includes `kgsl_hit`: positive identifies an owner-zero fake table, negative a
-matching table with a nonzero owner, and zero no observed collision.
+`tools/PortalAudioCtl.java` implements that protocol. On October 3, 2026, the
+root process called `setAudioProcessingParam(3001, 0.0)` for `AEC_ENABLE` and
+the service read back `0.0`. This is the first verified system-wide hardware
+AEC disable on the target. An ordinary UID-2000 invocation of the same client
+still fails with the expected `PLATFORM_AUDIO` permission denial.
 
-The first run with that fast scan rebooted after the owner-chain timeout but
-before the consumer emitted its return line. Exact KGSL source then showed its
-page-allocation VMAs use `VM_DONTCOPY`; a watcher created in the forked child
-therefore faulted before the next attempt reached the timeout. The watcher now
-runs in the pre-fork parent, which owns the KGSL mappings and remains alive in
-`waitpid` throughout the trigger. It scans on a spare CPU while `sched_setattr`
-is blocked and emits a minimal `KGSL_WATCH_HIT` marker on observing the write.
-The child skips its mapping scan in this mode. The corrected watcher observed
-no collision among 2,048 mappings during a complete constrained-write run.
-The reclaim sequence had allocated all KGSL pages before the later marker
-close that drains a frozen CPU-partial slab. It now uses an early batch after
-the target close and performs the remaining KGSL allocations immediately
-after that drain, covering both ways the target slab can reach buddy.
-KGSL assembles these 16 KiB buffers from 8 KiB allocation chunks on this
-driver family. The watcher therefore checks the constrained word's in-page
-offset in all four virtual page slots, so a split or rearranged target page is
-observable even when it cannot yet hold the complete fake object graph.
-That all-slot scan also missed with 64 MiB allocated across both stages, which
-shows the target remains in the `mm_struct` cache. An optional cache-cycle now
-refills the old partial slabs with fresh address spaces, moves allocation to
-later slabs, and frees the fresh objects in order. The later frees overflow
-CPU partial storage after the target becomes an early empty slab; KGSL then
-runs at this additional discard boundary. The first test placed this cycle
-after the large proc_uid gate and was stopped when clone page-table copying
-made the device unresponsive. Refill tasks are now reaped one at a time, and
-the proc_uid gate is built only after cache cycling and KGSL capture. A
-20-slab corrected run completed normally but still produced no KGSL hit across
-4,096 buffers. Because the fake graph nevertheless completes the scheduler
-operation, a concurrent parent watcher now peeks and scans the entire UNIX
-socket payload for the constrained word instead of assuming one fragment
-offset. Its first run found the pristine waiter's target pointer at stream
-offset `0x2240`; the nonzero preceding word correctly identified it as a
-negative control. The watcher now ignores such occurrences and requires the
-owner-zero signature of the mutated fake fops table.
+The same root process also set `NS_MODE` parameter 4001 from `5.0` to `0.0`.
+Readback confirmed both changes in one run:
 
-After that checkpoint, the remaining sequence is:
+```
+PORTAL_AUDIO_CTL_OK id=3001 before=NaN requested=0.0 after=0.0 match=true
+PORTAL_AUDIO_CTL_OK id=4001 before=5.0 requested=0.0 after=0.0 match=true
+```
 
-1. Complete the held KGSL collision verification on the next responsive boot.
-2. Use the configfs-based primitive to read the canonical `memstart_addr` and
-   configure the live direct-map translation.
-3. Patch the running `adbd` credentials and set SELinux permissive with the
-   existing bounded configfs writes.
-4. Open a fresh root ADB shell.
-5. Call Meta's protected audio service with
-   `setAudioProcessingParam(3001, 0)`, followed by the NS and AGC parameters
-   if required.
-6. Verify microphone capture during speaker playback and determine whether
-   the setting must be reapplied after audio-service or device restarts.
+This disables the separate residual-echo suppression mode as well as AEC for
+the active audio-service lifetime. Acoustic A/B capture and behavior after an
+audio-service restart remain to be measured. The audio settings are not yet
+applied automatically after a device reboot.
 
-Hardware echo cancellation remains enabled.
+An optional privileged action writes `persist.adb.tcp.port=5555` directly to
+Android's protobuf persistent-property store and sets the live
+`service.adb.tcp.port` property. The direct write preserves the property's
+SELinux label and uses a mode-0600 temporary file, `fsync`, and atomic rename.
+On October 3, 2026, the Portal rebooted from boot ID
+`2b34b396-83d4-41e0-8f2b-382e202bbfb9` to
+`ff0bcffb-66d9-49a0-bfdc-06713ffa00fb`; wireless ADB returned without any
+host-side enable command. After boot, `persist.adb.tcp.port` read `5555`,
+SELinux was enforcing, and ADB was enabled. The transient
+`service.adb.tcp.port` property was empty, which does not prevent adbd from
+listening when the persistent property is present.
