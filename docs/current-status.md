@@ -74,7 +74,10 @@ the proc_uid gate is built only after cache cycling and KGSL capture. A
 4,096 buffers. Because the fake graph nevertheless completes the scheduler
 operation, a concurrent parent watcher now peeks and scans the entire UNIX
 socket payload for the constrained word instead of assuming one fragment
-offset.
+offset. Its first run found the pristine waiter's target pointer at stream
+offset `0x2240`; the nonzero preceding word correctly identified it as a
+negative control. The watcher now ignores such occurrences and requires the
+owner-zero signature of the mutated fake fops table.
 
 After that checkpoint, the remaining sequence is:
 

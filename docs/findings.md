@@ -1045,3 +1045,13 @@ watcher now peeks the full queued payload and scans every aligned word for the
 constrained target, independent of fragment offset or order-3 half.
 
 Current result: hardware echo cancellation remains enabled.
+
+103. The first full-stream socket watcher reported `SOCKET_WATCH_HIT=-1097`
+before the vulnerable operation. Decoding word 1096 gives byte offset `0x2240`,
+the fake waiter's deliberately pristine `write_right` field; its preceding
+word was nonzero, as the negative sign indicated. The watcher now treats this
+as a negative control and continues scanning. It reports only the constrained
+write's owner-zero signature: a zero word immediately followed by the canonical
+`ashmem_misc.fops` target.
+
+Current result: hardware echo cancellation remains enabled.
