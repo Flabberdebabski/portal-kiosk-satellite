@@ -1102,3 +1102,16 @@ the existing UNIX stream page-fragment path can request and retain a matching
 32 KiB compound allocation.
 
 Current result: hardware echo cancellation remains enabled.
+
+108. Corrected order-3 grooming with the cache-recycle phase disabled produced
+the first real payload collision. `SOCKET_WATCH_HIT=328194` decodes to reclaim
+pair 20 and stream byte offset `0x1008`, exactly the constrained fake-table
+word with a zero owner. A second run invoked the CFI stage directly from the
+parent watcher and collided at offset `0x7008`; the surrounding operations at
+that placement were zero, so the first `ASHMEM_SET_NAME` returned `ENOTTY`.
+The two offsets differ by three 8 KiB chunks. The stream payload now tiles the
+compact fake operations table at offsets `0x1000`, `0x3000`, `0x5000`, and
+`0x7000`, while every copy retains pointers for the same leaked kernel table
+address.
+
+Current result: hardware echo cancellation remains enabled.
