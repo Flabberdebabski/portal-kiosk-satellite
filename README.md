@@ -1,12 +1,70 @@
 # Meta Portal Root and Provisioning for Kiosk Satellite
 
 This project prepares abandoned Meta Portal devices for use with
-[Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite). It provides a
-guarded, command-line provisioner for system changes that Android and Meta's
-firmware do not normally allow, including disabling hardware echo cancellation,
-making Kiosk Satellite the Device Owner, blocking firmware updates, removing
-unused Meta software and accounts, and reducing AIService CPU use without
-losing the Portal's LED-free presence detector.
+[Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) through a
+guarded command-line provisioner for durable system changes that Android and
+Meta's firmware do not normally allow.
+
+## Available features
+
+- **[Temporary, scoped root provisioning](#how-the-root-exploit-works):**
+  performs otherwise inaccessible system changes, then reboots normally with
+  SELinux enforcing instead of leaving a general root daemon running.
+- **[Complete kiosk profile](#6-run-the-provisioner):** applies the tested
+  audio, Device Owner, update-blocking, debloat, account-removal, and presence
+  settings with one command, reducing setup time and configuration mistakes.
+- **[System-wide hardware AEC and noise-suppression control](#1-disable-hardware-echo-cancellation-and-noise-suppression):**
+  stops the Portal's voice DSP from suppressing microphone input while its
+  speakers play, improving simultaneous playback and listening for every
+  Android app. The paired rollback restores Meta's original loader and
+  processing defaults.
+- **[Kiosk Satellite Device Owner provisioning](#2-make-kiosk-satellite-the-device-owner):**
+  grants Android's strongest kiosk policy role so Kiosk Satellite can manage
+  the device more reliably than an ordinary device-admin app.
+- **[Automatic firmware-update blocking](#3-disable-automatic-meta-firmware-updates):**
+  keeps an abandoned Portal on its known compatible build and prevents an
+  unexpected Meta update from breaking provisioning. The paired rollback
+  restores the original OTA configuration and packages.
+- **[Conservative Meta app debloat](#4-disable-unused-meta-applications):**
+  disables six unused communication, feed, display, contact, and telemetry
+  packages to reduce background work while retaining camera, presence, media,
+  WebView, and kiosk services. Its rollback restores every package's saved
+  state.
+- **[Local Meta-account removal](#5-remove-local-meta-accounts):** removes
+  obsolete Portal identity data and prevents its authenticators from
+  recreating those accounts, improving privacy without disabling the shared
+  services used by the camera and configuration stack.
+- **[Presence-pipeline optimization](#6-reduce-aiservice-cpu-use-while-preserving-presence-detection):**
+  disables optional Smart Camera segmentation, liveness, and re-identification
+  workloads while retaining the LED-free person-detection log consumed by
+  Kiosk Satellite. The tested profile cut AIService CPU use by roughly half
+  and includes an exact rollback.
+- **[Filtering Private DNS](#7-use-a-filtering-private-dns-resolver):** routes
+  DNS through a user-selected DNS-over-TLS resolver, allowing unwanted Meta
+  endpoints to be filtered without modifying system certificates or
+  installing a broad root firewall. The original DNS settings can be restored.
+- **[Read-only device status](#status-report):** reports target compatibility,
+  SELinux, Kiosk Satellite, Device Owner, audio, OTA, debloat, account,
+  presence, DNS, and provisioning-manifest state without exploiting or
+  rebooting the device.
+- **[Dry-run planning](#dry-run-planning):** previews actions, required
+  binaries and host tools, exploit use, reboot count, and current state without
+  changing the Portal.
+- **[Private backup bundles](#backup-bundles):** saves diagnostics and
+  reversible configuration snapshots in a mode-0600 archive with SHA-256
+  hashes, making maintenance and rollback evidence easier to preserve.
+- **[Interrupted-run recovery](#interrupted-run-recovery):** records pending
+  work on the Portal, removes stale staged files, and safely resumes the
+  validated action set after a host failure or power interruption.
+- **[Exact model and firmware safeguards](#supported-models):** matches both
+  the device codename and complete firmware fingerprint before any kernel
+  write, preventing offsets for one Portal build from being used on another.
+- **[Manual Kiosk Satellite installation](#5-prepare-kiosk-satellite):** leaves
+  APK selection and upgrades under the user's control instead of downloading
+  or replacing Kiosk Satellite automatically.
+- **[Automatic retry and two-boot verification](#running-and-troubleshooting):**
+  retries race-sensitive exploit attempts from clean boots and accepts changes
+  only after their requested behavior passes on two distinct normal boots.
 
 Support is intentionally build-specific. One Portal Go firmware is currently
 supported; the repository is organized so more Portal models and firmware
@@ -394,6 +452,8 @@ python3 tools/provision_portal.py \
 
 ## Inspection, backups, and recovery
 
+### Status report
+
 Print a read-only JSON report without exploiting or rebooting the Portal:
 
 ```sh
@@ -406,6 +466,8 @@ Satellite version and Device Owner state, audio and OTA markers, debloat and
 account status, the live presence pipeline, Private DNS, and the last
 provisioning manifest.
 
+### Dry-run planning
+
 Preview an action or the full profile without changing the device:
 
 ```sh
@@ -414,8 +476,11 @@ python3 tools/provision_portal.py \
 ```
 
 The plan identifies required build outputs, host tools, exploit use, estimated
-minimum reboots, and the current state. Create a private diagnostic and
-configuration archive before making changes with:
+minimum reboots, and the current state.
+
+### Backup bundles
+
+Create a private diagnostic and configuration archive before making changes:
 
 ```sh
 python3 tools/provision_portal.py \
@@ -426,6 +491,8 @@ python3 tools/provision_portal.py \
 archive contains status, relevant Android service dumps, reversible device
 snapshots, and a SHA-256 manifest. It can contain account names and device
 configuration, so store it as sensitive data.
+
+### Interrupted-run recovery
 
 Every mutating run writes a state manifest at
 `/data/local/tmp/portal-provision-state-v1.json`. It records the exact target,
