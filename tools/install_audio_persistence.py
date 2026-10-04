@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install and verify the Portal Go audio watchdog on the supported build."""
+"""Install and verify persistent Portal Go system customizations."""
 
 from __future__ import annotations
 
@@ -45,11 +45,13 @@ class PortalInstaller:
         attempts: int,
         log_dir: pathlib.Path,
         device_owner: bool = False,
+        disable_updates: bool = False,
     ):
         self.serial = serial
         self.attempts = attempts
         self.log_dir = log_dir
         self.device_owner = device_owner
+        self.disable_updates = disable_updates
         self.adb = ["adb", "-s", serial]
 
     @staticmethod
@@ -315,6 +317,8 @@ class PortalInstaller:
         }
         if self.device_owner:
             environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
+        if self.disable_updates:
+            environment["GHOSTLOCK_OTA_BLOCK"] = "1"
         self.adb_run(
             ["shell", "am", "force-stop", "--user", "0", "com.facebook.aloha.analytics"],
             timeout=10,
@@ -355,11 +359,12 @@ class PortalInstaller:
                 sys.stdout.flush()
                 output.write(line)
                 output.flush()
-                success_marker = (
-                    "kiosk device owner install "
-                    if self.device_owner
-                    else "audio persistence install "
-                )
+                if self.disable_updates:
+                    success_marker = "OTA block install "
+                elif self.device_owner:
+                    success_marker = "kiosk device owner install "
+                else:
+                    success_marker = "audio persistence install "
                 if success_marker in line and "ok=1" in line:
                     success = True
                     break
@@ -450,14 +455,84 @@ class PortalInstaller:
             f"ro.device_owner={owner_property}"
         )
 
+    def disable_ota_packages(self) -> None:
+        for package in (
+            "com.facebook.aloha.otaui",
+            "com.facebook.aloha.alohaotasetup",
+        ):
+            result = self.adb_run(
+                ["shell", "pm", "disable-user", "--user", "0", package],
+                timeout=10,
+            )
+            if result.returncode != 0 or "new state: disabled-user" not in result.stdout:
+                already_disabled = self.adb_run(
+                    ["shell", "pm", "list", "packages", "-d"],
+                    timeout=10,
+                    check=True,
+                ).stdout
+                if f"package:{package}" not in already_disabled:
+                    raise InstallError(
+                        f"failed to disable OTA package {package}: {result.stdout}"
+                    )
+
+    def verify_ota_block(self, wait_seconds: int = 30) -> None:
+        disabled = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"],
+            timeout=10,
+            check=True,
+        ).stdout
+        required = (
+            "com.facebook.aloha.otaui",
+            "com.facebook.aloha.alohaotasetup",
+        )
+        missing = [package for package in required if f"package:{package}" not in disabled]
+        if missing:
+            raise InstallError(f"OTA packages became enabled: {', '.join(missing)}")
+
+        deadline = time.monotonic() + wait_seconds
+        last_dump = ""
+        last_log = ""
+        while time.monotonic() < deadline:
+            result = self.adb_run(
+                ["shell", "dumpsys", "facebook.aloha.otaservice"], timeout=10
+            )
+            last_dump = result.stdout
+            last_log = self.adb_run(
+                ["shell", "logcat", "-d", "-v", "threadtime"], timeout=15
+            ).stdout
+            override_loaded = re.search(
+                r"getLatestBooleanWithOptions \[18296358819858434\], "
+                r"latestBoolean: false, source: OVERRIDE",
+                last_log,
+            )
+            if (
+                "getBool(kFirmwareOtaUpdateEnable): false" in last_dump
+                and override_loaded
+            ):
+                print(
+                    "OTA_BLOCK_OK packages=disabled "
+                    "firmware_ota_update_enable=false source=OVERRIDE"
+                )
+                return
+            time.sleep(2)
+        raise InstallError(
+            "OTA daemon did not report its firmware-update gate from the "
+            "local override; recent dump/log follow:\n"
+            + last_dump[-3000:]
+            + "\n"
+            + last_log[-3000:]
+        )
+
     def install(self) -> None:
         self.connect(wait_seconds=30)
         self.verify_target()
         already_owner = self.device_owner_preflight() if self.device_owner else False
-        if already_owner:
+        if already_owner and not self.disable_updates:
             self.verify_device_owner()
             print("INSTALL_OK Kiosk Satellite is already Device Owner")
             return
+        if self.disable_updates:
+            self.disable_ota_packages()
         self.stage()
         clean_boot_id: str | None = None
         for attempt in range(1, self.attempts + 1):
@@ -496,6 +571,9 @@ class PortalInstaller:
                 )
             if self.device_owner:
                 self.verify_device_owner()
+            if self.disable_updates:
+                self.disable_ota_packages()
+                self.verify_ota_block()
             print("VERIFY_REBOOT starting", flush=True)
             before, second_boot = self.reboot()
             if before != first_boot:
@@ -505,6 +583,9 @@ class PortalInstaller:
             self.verify_watchdog()
             if self.device_owner:
                 self.verify_device_owner()
+            if self.disable_updates:
+                self.disable_ota_packages()
+                self.verify_ota_block()
             print(
                 f"INSTALL_OK first_boot={first_boot} second_boot={second_boot} "
                 f"logs={self.log_dir}"
@@ -527,8 +608,9 @@ def build() -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Install the native AEC/NS watchdog through the build-specific "
-            "Portal Go GhostLock route, then verify it across two reboots."
+            "Install persistent Portal Go audio, Device Owner, and optional "
+            "OTA controls through the build-specific GhostLock route, then "
+            "verify them across two reboots."
         )
     )
     parser.add_argument("--serial", default="192.168.1.72:5555")
@@ -545,6 +627,14 @@ def parse_args() -> argparse.Namespace:
         "--skip-build", action="store_true", help="use existing build outputs"
     )
     parser.add_argument(
+        "--disable-updates",
+        action="store_true",
+        help=(
+            "disable Meta's OTA UI/test packages and install a persistent "
+            "MobileConfig override for the native OTA daemon"
+        ),
+    )
+    parser.add_argument(
         "--log-dir",
         type=pathlib.Path,
         help="directory for exploit attempt logs (default: a timestamp under /tmp)",
@@ -558,13 +648,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_dir = args.log_dir or pathlib.Path(f"/tmp/portal-audio-install-{stamp}")
+    log_dir = args.log_dir or pathlib.Path(f"/tmp/portal-install-{stamp}")
     log_dir.mkdir(parents=True, exist_ok=True)
     try:
         if not args.skip_build:
             build()
         PortalInstaller(
-            args.serial, args.attempts, log_dir, device_owner=args.device_owner
+            args.serial,
+            args.attempts,
+            log_dir,
+            device_owner=args.device_owner,
+            disable_updates=args.disable_updates,
         ).install()
     except (InstallError, OSError, zipfile.BadZipFile) as exc:
         print(f"INSTALL_ERROR: {exc}", file=sys.stderr)

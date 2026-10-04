@@ -1244,3 +1244,47 @@ after every attempt, preventing reuse of stale kernel state.
 Current result: Kiosk Satellite is the persistent Device Owner for user 0;
 hardware AEC and residual-echo suppression remain disabled across boot and
 wireless ADB remains persistent.
+
+120. Mapped the Portal firmware-update stack on the exact installed image.
+The native `/system/bin/otad` service delegates installation to Android's A/B
+`update_engine` and reads its policy from MobileConfig unit 5014,
+`sessionless_aloha_ota_daemon`. Parameter 36 is
+`firmware_ota_update_enable`. The compiled fallback is false. The daemon also
+contains an early `otad.nodemon` property check, but the property is a
+nonpersistent `default_prop`; Android rejects both shell and temporary-root
+attempts to set it through the property service. It cannot safely be stored in
+`persistent_properties`, which accepts only `persist.*` names.
+
+121. Disabling the entire `com.facebook.aloha.platformmobileconfig` broker did
+make the OTA daemon fall back to false, but generated continuous errors across
+unrelated Portal services and removed audio configuration access. That test
+was rolled back. Exact decompilation of
+`com.facebook.alohaservices.alohausers` instead found Meta's supported local
+override layer and its `files/mobileconfig/mc_overrides.json` storage. A
+privileged snapshot confirmed the live sessionless MobileConfig directory and
+that no prior override file existed.
+
+122. Installed one atomic local override for
+`5014: sessionless_aloha_ota_daemon` / parameter
+`36: firmware_ota_update_enable: false`. The file uses the provider's
+10044:10044 ownership and app-data SELinux label. The installer records an
+absent-file marker under `/data/local/tmp/portal-ota-backup`, refuses to
+replace any unrelated existing override, and restarts only the provider after
+the write. The dedicated `com.facebook.aloha.otaui` and
+`com.facebook.aloha.alohaotasetup` packages are persistently disabled for user
+0; PlatformMobileConfig itself remains enabled.
+
+123. Verified the OTA block after two ordinary clean boots. On boot
+`e36fba77-d832-4adb-a0c0-7dbc552d67e6` and again on boot
+`5757afe1-3d74-46f9-a245-10239d30571e`, `otad` remained idle, had no downloaded
+JSON manifest, and reported `kFirmwareOtaUpdateEnable=false`. Meta's provider
+logged parameter key `18296358819858434` as
+`latestBoolean: false, source: OVERRIDE`, proving that the local file won over
+server configuration. Both OTA packages remained disabled on the second boot.
+Kiosk Satellite remained Device Owner, `persist.adb.tcp.port` remained 5555,
+and the audio watchdog again verified AEC 3001 and NS 4001 at zero.
+
+Current result: automatic firmware updates are pinned off across boot while
+the shared MobileConfig service remains healthy. Hardware AEC and residual
+echo suppression remain disabled, wireless ADB is persistent, and Kiosk
+Satellite remains Device Owner.

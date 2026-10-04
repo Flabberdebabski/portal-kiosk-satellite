@@ -84,6 +84,29 @@ slot changed to the equal-length name `libpa.so`; the original is retained as
 `libcoldstart_1.portal-original.so`. The helper keeps `libdl.so` as a normal
 dependency, so the original cold-start library still resolves its symbols.
 
+## Persistent OTA disable
+
+The same installer can disable Meta's automatic firmware-update path:
+
+```sh
+python3 tools/install_audio_persistence.py \
+  --serial 192.168.1.72:5555 --disable-updates
+```
+
+This disables `com.facebook.aloha.otaui` and
+`com.facebook.aloha.alohaotasetup` for user 0 and atomically installs a local
+MobileConfig override for
+`sessionless_aloha_ota_daemon:firmware_ota_update_enable=false`. The override
+file is owned by the original MobileConfig app UID, retains the app-data
+SELinux label, and is loaded after server configuration. The installer refuses
+to replace an unrelated existing override file. It records an absent-file
+marker under `/data/local/tmp/portal-ota-backup`, then requires both the native
+daemon's false gate and Meta's `source: OVERRIDE` log on two fresh boots.
+
+The native `otad` and Android `update_engine` processes still exist because
+both are shared system infrastructure. With the firmware-update gate pinned
+false, `otad` remains idle and does not discover or install a package.
+
 ## Current state
 
 The exact installed kernel is vulnerable. The exploit now reclaims the correct order-3 `mm_struct` slab, obtains arbitrary kernel read/write, patches its own credentials to UID 0 with full capabilities, and sets SELinux permissive. On October 3, 2026, it successfully set `AEC_ENABLE` (parameter `3001`) and `NS_MODE` (parameter `4001`) to `0.0`, with both values confirmed by readback. This disables hardware AEC and the separate residual-echo suppression mode for the active audio-service lifetime.
@@ -107,5 +130,13 @@ and set `ro.device_owner=true`. That state survived normal reboots with boot
 IDs `31327449-dca9-47ab-919c-8608945b6eb1` and
 `73b06f93-35bc-47f5-bb99-ff324ca27c7e`. All four pre-existing Meta accounts
 remain installed and unchanged.
+
+On October 4, 2026, automatic firmware updates were disabled and verified
+after normal reboot to boot ID `5757afe1-3d74-46f9-a245-10239d30571e`.
+`dumpsys facebook.aloha.otaservice` reported idle state, no downloaded JSON
+manifest, and `kFirmwareOtaUpdateEnable=false`; Meta's MobileConfig client
+reported the exact parameter value as `source: OVERRIDE`. Both OTA packages
+remained disabled. Device Owner, persistent wireless ADB, and the audio
+watchdog all passed on the same boot.
 
 This code is tied to the fingerprint and kernel listed above. A mismatch can panic the device.

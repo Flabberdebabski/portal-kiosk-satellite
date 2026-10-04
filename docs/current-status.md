@@ -108,3 +108,30 @@ host-side enable command. After boot, `persist.adb.tcp.port` read `5555`,
 SELinux was enforcing, and ADB was enabled. The transient
 `service.adb.tcp.port` property was empty, which does not prevent adbd from
 listening when the persistent property is present.
+
+Automatic firmware updates are now disabled through Meta's own MobileConfig
+precedence layer. Exact APK analysis identified unit
+`sessionless_aloha_ota_daemon` (5014), parameter
+`firmware_ota_update_enable` (36), and the app-private override file
+`files/mobileconfig/mc_overrides.json`. The privileged installer writes only
+that false override with UID/GID 10044, the original app-data SELinux label,
+`fsync`, and an atomic rename. It refuses to replace an unrelated existing
+override file and records that the file was originally absent under
+`/data/local/tmp/portal-ota-backup`.
+
+The dedicated UI packages `com.facebook.aloha.otaui` and
+`com.facebook.aloha.alohaotasetup` are also disabled for user 0. The broader
+`com.facebook.aloha.platformmobileconfig` service remains enabled because
+disabling it disrupted other Portal services. Static analysis found the
+native daemon's `otad.nodemon` property, but Android's property service rejects
+that nonpersistent default property even from the temporary privileged
+process, so it is not part of the installed solution.
+
+After normal reboot to boot ID
+`5757afe1-3d74-46f9-a245-10239d30571e`, the daemon was idle, had no downloaded
+JSON manifest, and reported `kFirmwareOtaUpdateEnable=false`. Meta's own client
+logged the exact parameter as `latestBoolean: false, source: OVERRIDE`, proving
+the durable local override was active rather than merely observing the
+server's current false value. Both OTA packages remained disabled. The same
+boot also verified Device Owner, wireless ADB on port 5555, and audio parameters
+3001/4001 at zero.
