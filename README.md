@@ -193,8 +193,8 @@ your Linux distribution and Android SDK manager. Install NDK version
 ### 2. Clone the repository
 
 ```sh
-git clone https://github.com/jxlarrea/portal-root.git
-cd portal-root
+git clone https://github.com/jxlarrea/portal-root-kiosk-satellite.git
+cd portal-root-kiosk-satellite
 ```
 
 ### 3. Configure the Android toolchain
