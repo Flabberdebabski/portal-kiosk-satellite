@@ -18,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.request
 import zipfile
 
 from portal_targets import PortalTarget, find_target
@@ -29,6 +30,20 @@ PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
 ACCOUNT_CTL_LOCAL = ROOT / "exploit/build/portal-account-ctl.jar"
 ACCOUNT_CTL_REMOTE = "/data/local/tmp/portal-account-ctl.jar"
+SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+SHIZUKU_HELPER_PACKAGE = "dev.portal.shizukuhelper"
+SHIZUKU_HELPER_LOCAL = ROOT / "shizuku-helper/build/portal-shizuku-helper.apk"
+SHIZUKU_KEY_REMOTE = "/data/local/tmp/portal-shizuku-adbkey.pub"
+SHIZUKU_SAVED_KEY_REMOTE = "/data/local/tmp/portal-shizuku-adbkey-v1.pub"
+SHIZUKU_VERSION = "13.6.0.r1086.2650830c"
+SHIZUKU_APK_NAME = "shizuku-v13.6.0.r1086.2650830c-release.apk"
+SHIZUKU_APK_URL = (
+    "https://github.com/RikkaApps/Shizuku/releases/download/v13.6.0/"
+    + SHIZUKU_APK_NAME
+)
+SHIZUKU_APK_SHA256 = (
+    "6e273ab0e991c4e79bc8b1bbb9b9dd739ccac1a8712a541a214078886b7b790f"
+)
 STATE_REMOTE = "/data/local/tmp/portal-provision-state-v1.json"
 PRIVACY_BACKUP_REMOTE = "/data/local/tmp/portal-private-dns-before-v1.json"
 KIOSK_COMPONENT = "me.jxl.kiosk_satellite/.KioskAdminReceiver"
@@ -98,6 +113,9 @@ class PortalProvisioner:
         restore_presence_profile: bool = False,
         privacy_dns: str | None = None,
         restore_privacy_dns: bool = False,
+        shizuku: bool = False,
+        remove_shizuku: bool = False,
+        shizuku_apk: pathlib.Path | None = None,
         status_only: bool = False,
         dry_run: bool = False,
         backup_path: pathlib.Path | None = None,
@@ -119,6 +137,11 @@ class PortalProvisioner:
         self.restore_presence_profile = restore_presence_profile
         self.privacy_dns = privacy_dns
         self.restore_privacy_dns = restore_privacy_dns
+        self.shizuku = shizuku
+        self.remove_shizuku = remove_shizuku
+        self.shizuku_apk = shizuku_apk
+        self.shizuku_public_key: pathlib.Path | None = None
+        self.shizuku_verifier_initially_disabled: bool | None = None
         self.status_only = status_only
         self.dry_run = dry_run
         self.backup_path = backup_path
@@ -255,16 +278,23 @@ class PortalProvisioner:
             files.append((HELPER_LOCAL, HELPER_REMOTE))
         if self.remove_meta_accounts:
             files.append((ACCOUNT_CTL_LOCAL, ACCOUNT_CTL_REMOTE))
+        if self.shizuku:
+            if self.shizuku_public_key is None:
+                raise ProvisionError("Shizuku helper key was not prepared")
+            files.append((self.shizuku_public_key, SHIZUKU_KEY_REMOTE))
         for local, remote in files:
             if not local.is_file() or local.stat().st_size == 0:
                 raise ProvisionError(f"missing build output: {local}")
             self.adb_run(["push", str(local), remote], timeout=30, check=True)
-            self.adb_run(["shell", "chmod", "0755", remote], timeout=5, check=True)
+            mode = "0644" if remote == SHIZUKU_KEY_REMOTE else "0755"
+            self.adb_run(["shell", "chmod", mode, remote], timeout=5, check=True)
         staged = f"preload={PRELOAD_REMOTE}"
         if self.audio:
             staged += f" helper={HELPER_REMOTE}"
         if self.remove_meta_accounts:
             staged += f" account_ctl={ACCOUNT_CTL_REMOTE}"
+        if self.shizuku:
+            staged += f" shizuku_key={SHIZUKU_KEY_REMOTE}"
         print(f"STAGED {staged}")
 
     def requested_actions(self) -> dict[str, object]:
@@ -281,6 +311,8 @@ class PortalProvisioner:
             "optimize_presence",
             "restore_presence_profile",
             "restore_privacy_dns",
+            "shizuku",
+            "remove_shizuku",
         ):
             if getattr(self, name):
                 actions[name] = True
@@ -310,6 +342,10 @@ class PortalProvisioner:
             candidates.append(HELPER_LOCAL)
         if self.remove_meta_accounts:
             candidates.append(ACCOUNT_CTL_LOCAL)
+        if self.shizuku:
+            candidates.append(SHIZUKU_HELPER_LOCAL)
+            if self.shizuku_apk:
+                candidates.append(self.shizuku_apk)
         hashes: dict[str, str] = {}
         for path in candidates:
             if path.is_file():
@@ -446,6 +482,13 @@ class PortalProvisioner:
         presence_restored = exists(
             "/data/local/tmp/portal-presence-backup/restored-v1"
         )
+        shizuku_dump = shell("dumpsys", "package", SHIZUKU_PACKAGE)
+        shizuku_version = re.search(r"\bversionName=([^\s]+)", shizuku_dump)
+        process_list = shell("ps", "-A")
+        shizuku_process = next(
+            (line for line in process_list.splitlines() if "shizuku_server" in line),
+            "",
+        )
         return {
             "schema": 1,
             "serial": self.serial,
@@ -556,6 +599,18 @@ class PortalProvisioner:
                 ).returncode
                 == 0,
             },
+            "shizuku": {
+                "installed": SHIZUKU_PACKAGE in installed,
+                "version_name": (
+                    shizuku_version.group(1) if shizuku_version else None
+                ),
+                "boot_helper_installed": SHIZUKU_HELPER_PACKAGE in installed,
+                "key_authorized_by_provisioner": exists(SHIZUKU_SAVED_KEY_REMOTE),
+                "server_running": bool(shizuku_process),
+                "server_user": (
+                    shizuku_process.split()[0] if shizuku_process else None
+                ),
+            },
             "provision_manifest": manifest,
         }
 
@@ -578,6 +633,8 @@ class PortalProvisioner:
                 self.remove_meta_accounts,
                 self.optimize_presence,
                 self.restore_presence_profile,
+                self.shizuku,
+                self.remove_shizuku,
             )
         )
 
@@ -590,6 +647,7 @@ class PortalProvisioner:
         accounts = status.get("meta_accounts", {})
         presence = status.get("presence", {})
         privacy = status.get("privacy_dns", {})
+        shizuku = status.get("shizuku", {})
         current = {
             "audio": audio.get("state") if isinstance(audio, dict) else None,
             "device_owner": (
@@ -602,6 +660,7 @@ class PortalProvisioner:
             ),
             "presence": presence.get("state") if isinstance(presence, dict) else None,
             "privacy_dns": privacy if isinstance(privacy, dict) else None,
+            "shizuku": shizuku if isinstance(shizuku, dict) else None,
         }
         required_outputs = []
         if self.target:
@@ -610,6 +669,8 @@ class PortalProvisioner:
             required_outputs.append(str(HELPER_LOCAL))
         if self.remove_meta_accounts:
             required_outputs.append(str(ACCOUNT_CTL_LOCAL))
+        if self.shizuku:
+            required_outputs.append(str(SHIZUKU_HELPER_LOCAL))
         report = {
             "actions": actions,
             "current": current,
@@ -821,6 +882,286 @@ class PortalProvisioner:
         action = "restored" if self.restore_privacy_dns else "configured"
         print(f"PRIVACY_DNS_OK action={action} mode={mode} hostname={hostname}")
 
+    def resolve_shizuku_apk(self) -> pathlib.Path:
+        if self.shizuku_apk is not None:
+            path = self.shizuku_apk.expanduser().resolve()
+            if not path.is_file():
+                raise ProvisionError(f"Shizuku APK does not exist: {path}")
+        else:
+            cache = pathlib.Path.home() / ".cache" / "portal-root"
+            cache.mkdir(parents=True, exist_ok=True)
+            path = cache / SHIZUKU_APK_NAME
+            valid = path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == (
+                SHIZUKU_APK_SHA256
+            )
+            if not valid:
+                temporary = path.with_suffix(path.suffix + ".tmp")
+                temporary.unlink(missing_ok=True)
+                print(
+                    f"SHIZUKU_DOWNLOAD version={SHIZUKU_VERSION} "
+                    f"source={SHIZUKU_APK_URL}",
+                    flush=True,
+                )
+                try:
+                    urllib.request.urlretrieve(SHIZUKU_APK_URL, temporary)
+                except OSError as exc:
+                    temporary.unlink(missing_ok=True)
+                    raise ProvisionError(f"Shizuku download failed: {exc}") from exc
+                digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
+                if digest != SHIZUKU_APK_SHA256:
+                    temporary.unlink(missing_ok=True)
+                    raise ProvisionError(
+                        "official Shizuku APK checksum mismatch: "
+                        f"{digest} != {SHIZUKU_APK_SHA256}"
+                    )
+                temporary.replace(path)
+            self.shizuku_apk = path
+        try:
+            with zipfile.ZipFile(path) as archive:
+                if "AndroidManifest.xml" not in archive.namelist():
+                    raise ProvisionError(f"invalid Shizuku APK: {path}")
+                bad = archive.testzip()
+                if bad:
+                    raise ProvisionError(f"corrupt Shizuku APK member: {bad}")
+        except zipfile.BadZipFile as exc:
+            raise ProvisionError(f"invalid Shizuku APK: {path}") from exc
+        return path
+
+    def install_shizuku_payload(self) -> None:
+        apk = self.resolve_shizuku_apk()
+        self.install_apk_preserving_verifier(apk, "shizuku")
+        self.install_apk_preserving_verifier(SHIZUKU_HELPER_LOCAL, "shizuku-helper")
+        self.settle_package_state()
+        self.verify_shizuku_verifier_state()
+        package_dump = self.adb_run(
+            ["shell", "dumpsys", "package", SHIZUKU_PACKAGE],
+            timeout=20,
+            check=True,
+        ).stdout
+        if f"versionName={SHIZUKU_VERSION}" not in package_dump and (
+            self.shizuku_apk.name == SHIZUKU_APK_NAME
+        ):
+            raise ProvisionError(
+                f"installed Shizuku version is not {SHIZUKU_VERSION}"
+            )
+
+        private_key = self.adb_run(
+            [
+                "exec-out",
+                "run-as",
+                SHIZUKU_HELPER_PACKAGE,
+                "cat",
+                "files/adbkey",
+            ],
+            timeout=10,
+        ).stdout
+        existing_public = self.adb_run(
+            [
+                "exec-out",
+                "run-as",
+                SHIZUKU_HELPER_PACKAGE,
+                "cat",
+                "files/adbkey.pub",
+            ],
+            timeout=10,
+        ).stdout.strip()
+        key_exists = (
+            "-----BEGIN PRIVATE KEY-----" in private_key
+            and "-----END PRIVATE KEY-----" in private_key
+            and re.fullmatch(r"[A-Za-z0-9+/=]+ [^\r\n]+", existing_public)
+            is not None
+        )
+        if not key_exists:
+            with tempfile.TemporaryDirectory(prefix="portal-shizuku-key-") as temp:
+                key = pathlib.Path(temp) / "adbkey"
+                self.run(["adb", "keygen", str(key)], timeout=30, check=True)
+                for source, remote, destination in (
+                    (key, "/data/local/tmp/portal-shizuku-key.tmp", "files/adbkey"),
+                    (
+                        pathlib.Path(str(key) + ".pub"),
+                        "/data/local/tmp/portal-shizuku-key.pub.tmp",
+                        "files/adbkey.pub",
+                    ),
+                ):
+                    self.adb_run(["push", str(source), remote], timeout=15, check=True)
+                    self.adb_run(["shell", "chmod", "0644", remote], timeout=5, check=True)
+                    self.adb_run(
+                        ["shell", "run-as", SHIZUKU_HELPER_PACKAGE, "mkdir", "-p", "files"],
+                        timeout=10,
+                        check=True,
+                    )
+                    self.adb_run(
+                        ["shell", "run-as", SHIZUKU_HELPER_PACKAGE, "cp", remote, destination],
+                        timeout=10,
+                        check=True,
+                    )
+                    self.adb_run(
+                        ["shell", "run-as", SHIZUKU_HELPER_PACKAGE, "chmod", "0600", destination],
+                        timeout=10,
+                        check=True,
+                    )
+                    self.adb_run(["shell", "rm", "-f", remote], timeout=5)
+
+        public = self.adb_run(
+            [
+                "exec-out",
+                "run-as",
+                SHIZUKU_HELPER_PACKAGE,
+                "cat",
+                "files/adbkey.pub",
+            ],
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+        if not re.fullmatch(r"[A-Za-z0-9+/=]+ [^\r\n]+", public):
+            raise ProvisionError("Portal Shizuku helper returned an invalid ADB public key")
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.shizuku_public_key = self.log_dir / "portal-shizuku-adbkey.pub"
+        self.shizuku_public_key.write_text(public + "\n", encoding="ascii")
+        self.shizuku_public_key.chmod(0o600)
+        print(
+            f"SHIZUKU_PAYLOAD_OK version={SHIZUKU_VERSION} "
+            f"helper={SHIZUKU_HELPER_PACKAGE} key_reused={int(key_exists)}"
+        )
+
+    def install_apk_preserving_verifier(self, apk: pathlib.Path, tag: str) -> None:
+        """Install an APK while restoring Meta's certificate verifier state."""
+        remote = f"/data/local/tmp/portal-{tag}-install.apk"
+        self.adb_run(["push", str(apk), remote], timeout=60, check=True)
+        disabled = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+        ).stdout
+        verifier_was_disabled = "package:com.facebook.appverifier" in disabled
+        if self.shizuku_verifier_initially_disabled is None:
+            self.shizuku_verifier_initially_disabled = verifier_was_disabled
+        if verifier_was_disabled:
+            command = f"pm install -r {shlex.quote(remote)}; rc=$?; " \
+                f"rm -f {shlex.quote(remote)}; exit $rc"
+        else:
+            command = (
+                "cleanup() { pm enable --user 0 com.facebook.appverifier "
+                f">/dev/null; rm -f {shlex.quote(remote)}; }}; "
+                "trap cleanup EXIT HUP INT TERM; "
+                "pm disable-user --user 0 com.facebook.appverifier >/dev/null || exit 1; "
+                f"pm install -r {shlex.quote(remote)}"
+            )
+        result = self.adb_run(["shell", command], timeout=120)
+        if result.returncode != 0 or "Success" not in result.stdout:
+            raise ProvisionError(
+                f"APK installation failed for {apk}: {result.stdout.strip()}"
+            )
+        print(
+            f"APK_INSTALL_OK package_source={apk.name} "
+            f"verifier_state={'disabled' if verifier_was_disabled else 'enabled'}"
+        )
+
+    def verify_shizuku_verifier_state(self) -> None:
+        if self.shizuku_verifier_initially_disabled is None:
+            return
+        disabled = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+        ).stdout
+        actual = "package:com.facebook.appverifier" in disabled
+        if actual != self.shizuku_verifier_initially_disabled:
+            raise ProvisionError(
+                "Meta package verifier state was not restored: "
+                f"disabled={int(actual)} expected="
+                f"{int(self.shizuku_verifier_initially_disabled)}"
+            )
+        print(
+            "SHIZUKU_VERIFIER_OK state="
+            + ("disabled" if actual else "enabled")
+        )
+
+    def uninstall_shizuku_payload(self) -> None:
+        self.adb_run(["shell", "pkill", "-f", "shizuku_server"], timeout=10)
+        for package in (SHIZUKU_HELPER_PACKAGE, SHIZUKU_PACKAGE):
+            result = self.adb_run(["uninstall", package], timeout=60)
+            if result.returncode != 0 and "Unknown package" not in result.stdout:
+                raise ProvisionError(
+                    f"failed to uninstall {package}: {result.stdout.strip()}"
+                )
+        print("SHIZUKU_REMOVE_APPS_OK")
+
+    def verify_shizuku(self, wait_seconds: int = 120) -> None:
+        self.verify_shizuku_verifier_state()
+        package_state = self.adb_run(
+            ["shell", "dumpsys", "package", SHIZUKU_HELPER_PACKAGE],
+            timeout=15,
+            check=True,
+        ).stdout
+        if re.search(r"\bstopped=true\b", package_state):
+            self.adb_run(
+                [
+                    "shell",
+                    "am",
+                    "broadcast",
+                    "-f",
+                    "0x20",
+                    "-a",
+                    "dev.portal.shizukuhelper.START",
+                    "-p",
+                    SHIZUKU_HELPER_PACKAGE,
+                ],
+                timeout=15,
+                check=True,
+            )
+            print("SHIZUKU_HELPER_ACTIVATED first_install=1")
+        deadline = time.monotonic() + wait_seconds
+        process = ""
+        logs = ""
+        while time.monotonic() < deadline:
+            packages = self.adb_run(
+                ["shell", "pm", "list", "packages"], timeout=15, check=True
+            ).stdout
+            process = self.adb_run(
+                ["shell", "ps", "-A"], timeout=10, check=True
+            ).stdout
+            logs = self.adb_run(
+                ["shell", "logcat", "-d", "-s", "PortalShizuku:*"],
+                timeout=15,
+            ).stdout
+            process_line = next(
+                (line for line in process.splitlines() if "shizuku_server" in line),
+                "",
+            )
+            if (
+                f"package:{SHIZUKU_PACKAGE}" in packages
+                and f"package:{SHIZUKU_HELPER_PACKAGE}" in packages
+                and process_line
+                and process_line.split()[0] == "shell"
+            ):
+                print(
+                    "SHIZUKU_OK privilege=shell startup=device-local "
+                    f"process={process_line.strip()!r} "
+                    f"helper_log={int('Shizuku started through loopback ADB' in logs)}"
+                )
+                return
+            time.sleep(3)
+        raise ProvisionError(
+            "Shizuku did not start as Android shell after boot; "
+            f"process_observed={int('shizuku_server' in process)} "
+            f"helper_log={logs[-500:]!r}"
+        )
+
+    def verify_shizuku_removed(self) -> None:
+        packages = self.adb_run(
+            ["shell", "pm", "list", "packages"], timeout=15, check=True
+        ).stdout
+        process = self.adb_run(["shell", "ps", "-A"], timeout=10, check=True).stdout
+        remaining = [
+            package
+            for package in (SHIZUKU_PACKAGE, SHIZUKU_HELPER_PACKAGE)
+            if f"package:{package}" in packages
+        ]
+        if remaining or "shizuku_server" in process:
+            raise ProvisionError(
+                "Shizuku removal did not persist: "
+                f"packages={','.join(remaining) or 'none'} "
+                f"server={int('shizuku_server' in process)}"
+            )
+        print("SHIZUKU_REMOVED_OK packages=absent server=absent")
+
     def recover_actions(self) -> bool:
         state = self.read_state()
         self.adb_run(
@@ -831,6 +1172,7 @@ class PortalProvisioner:
                 PRELOAD_REMOTE,
                 HELPER_REMOTE,
                 ACCOUNT_CTL_REMOTE,
+                SHIZUKU_KEY_REMOTE,
             ],
             timeout=10,
         )
@@ -858,6 +1200,8 @@ class PortalProvisioner:
             "restore_presence_profile",
             "privacy_dns",
             "restore_privacy_dns",
+            "shizuku",
+            "remove_shizuku",
         }
         for name, value in actions.items():
             if name not in allowed:
@@ -1091,6 +1435,10 @@ class PortalProvisioner:
                     "GHOSTLOCK_META_ACCOUNT_CTL_JAR": ACCOUNT_CTL_REMOTE,
                 }
             )
+        if self.shizuku:
+            environment["GHOSTLOCK_SHIZUKU_AUTHORIZE_KEY"] = "1"
+        if self.remove_shizuku:
+            environment["GHOSTLOCK_SHIZUKU_REMOVE_KEY"] = "1"
         self.adb_run(
             ["shell", "am", "force-stop", "--user", "0", "com.facebook.aloha.analytics"],
             timeout=10,
@@ -1147,6 +1495,16 @@ class PortalProvisioner:
             )
         if self.remove_meta_accounts:
             expected_markers["meta_accounts"] = ("Meta account removal", True)
+        if self.shizuku:
+            expected_markers["shizuku_key"] = (
+                "Shizuku ADB key authorize",
+                True,
+            )
+        if self.remove_shizuku:
+            expected_markers["shizuku_key_remove"] = (
+                "Shizuku ADB key remove",
+                True,
+            )
         observed_markers: set[str] = set()
         with log_path.open("w", encoding="utf-8") as output:
             process = subprocess.Popen(
@@ -1802,6 +2160,10 @@ class PortalProvisioner:
             self.verify_presence_runtime(require_profile=False)
         if self.privacy_dns or self.restore_privacy_dns:
             self.verify_privacy_dns()
+        if self.shizuku:
+            self.verify_shizuku()
+        if self.remove_shizuku:
+            self.verify_shizuku_removed()
 
     def verify_across_two_reboots(self, first_boot: str | None = None) -> None:
         if first_boot is None:
@@ -1868,6 +2230,8 @@ class PortalProvisioner:
             or self.restore_presence_profile
             or (self.device_owner and not already_owner)
             or (self.remove_meta_accounts and not already_meta_clean)
+            or self.shizuku
+            or self.remove_shizuku
         )
         if not privileged_action:
             self.verify_across_two_reboots()
@@ -1878,7 +2242,10 @@ class PortalProvisioner:
                 target=self.target,
                 build_audio=self.audio,
                 build_account=self.remove_meta_accounts,
+                build_shizuku=self.shizuku,
             )
+        if self.shizuku:
+            self.install_shizuku_payload()
         self.stage()
         clean_boot_id: str | None = None
         for attempt in range(1, self.attempts + 1):
@@ -1911,13 +2278,18 @@ class PortalProvisioner:
                 continue
             if self.enable_updates:
                 self.enable_ota_packages()
+            if self.remove_shizuku:
+                self.uninstall_shizuku_payload()
             self.verify_across_two_reboots(first_boot=post_attempt_boot)
             return
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
 
 def build(
-    target: PortalTarget | None, build_audio: bool, build_account: bool
+    target: PortalTarget | None,
+    build_audio: bool,
+    build_account: bool,
+    build_shizuku: bool,
 ) -> None:
     if target is None:
         raise ProvisionError("target must be selected before building")
@@ -1928,6 +2300,8 @@ def build(
         commands.append(["make", "-C", str(ROOT / "helper"), "native"])
     if build_account:
         commands.append(["make", "-C", str(ROOT / "exploit"), "account-ctl"])
+    if build_shizuku:
+        commands.append(["make", "-C", str(ROOT / "shizuku-helper"), "all"])
     for command in commands:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
@@ -1972,6 +2346,29 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-build", action="store_true", help="use existing build outputs"
+    )
+    shizuku_group = parser.add_mutually_exclusive_group()
+    shizuku_group.add_argument(
+        "--shizuku",
+        action="store_true",
+        help=(
+            "install official Shizuku and a device-local boot helper that "
+            "starts it with Android shell privileges through loopback ADB"
+        ),
+    )
+    shizuku_group.add_argument(
+        "--remove-shizuku",
+        action="store_true",
+        help="remove Shizuku, its boot helper, and the helper's authorized ADB key",
+    )
+    parser.add_argument(
+        "--shizuku-apk",
+        type=pathlib.Path,
+        metavar="PATH",
+        help=(
+            "use a local Shizuku APK with --shizuku instead of downloading "
+            f"the pinned official {SHIZUKU_VERSION} release"
+        ),
     )
     update_group = parser.add_mutually_exclusive_group()
     update_group.add_argument(
@@ -2107,8 +2504,12 @@ def parse_args() -> argparse.Namespace:
             args.restore_presence_profile,
             args.privacy_dns,
             args.restore_privacy_dns,
+            args.shizuku,
+            args.remove_shizuku,
         )
     )
+    if args.shizuku_apk and not args.shizuku:
+        parser.error("--shizuku-apk requires --shizuku")
     if args.recover and (selected or args.profile):
         parser.error("--recover resumes its saved action set and cannot take action flags")
     if args.recover and args.backup:
@@ -2147,6 +2548,9 @@ def main() -> int:
             restore_presence_profile=args.restore_presence_profile,
             privacy_dns=args.privacy_dns,
             restore_privacy_dns=args.restore_privacy_dns,
+            shizuku=args.shizuku,
+            remove_shizuku=args.remove_shizuku,
+            shizuku_apk=args.shizuku_apk,
             status_only=args.status or args.backup_only,
             dry_run=args.dry_run,
             backup_path=args.backup,

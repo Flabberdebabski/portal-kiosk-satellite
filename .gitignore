@@ -3,6 +3,8 @@ exploit/build/*
 !exploit/build/.gitkeep
 helper/build/*
 !helper/build/.gitkeep
+shizuku-helper/build/*
+!shizuku-helper/build/.gitkeep
 exploit/portal-terry-*
 *.o
 *.so

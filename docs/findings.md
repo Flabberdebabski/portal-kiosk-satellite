@@ -1525,3 +1525,39 @@ Current result: all requested fleet-management additions except automatic
 Kiosk Satellite APK installation are implemented. The Portal ends in its
 audio-disabled, OTA-blocked, presence-optimized kiosk state, and the new
 rollback paths have been exercised end to end.
+
+148. Upstream Shizuku `13.6.0.r1086.2650830c` confirms that its Android 10
+manager cannot start ADB mode from `BOOT_COMPLETED`; upstream enables that
+path only on Android 13 and later. A host watcher would work but would require
+another computer after every Portal reboot. Implemented a device-local helper
+instead. It uses the classic ADB protocol only against `127.0.0.1:5555`, signs
+the daemon's token with a per-device RSA key, and invokes the official
+Shizuku native starter. It never submits an unknown public key, so a failed or
+interrupted setup cannot leave an ADB authorization prompt.
+
+149. Meta's required `com.facebook.appverifier` rejected the official Shizuku
+certificate with `INSTALL_FAILED_VERIFICATION_FAILURE`; its logs showed the
+Rikka certificate mismatching Meta's allowlist. Disabling that package for
+the duration of `pm install` allowed both official Shizuku and the local helper
+to install. The final installer uses an in-shell cleanup trap to restore the
+original verifier state and applies the Package Manager settle delay plus
+`sync`. Clean boot `74c8f741-b55d-4b85-954a-2f2b45030da8` retained the
+verifier as enabled.
+
+150. The privileged action appended the helper's generated public key to
+`/data/misc/adb/adb_keys` without replacing the file or its SELinux label. The
+first post-install verifier clears Android's initial stopped-package state with
+one explicit broadcast; later boots use the normal `BOOT_COMPLETED` delivery.
+`shizuku_server` ran as user `shell` on clean verification boots
+`8c94eb85-cb0e-476d-af15-abd02e41d804` and
+`caa1c1cc-ef32-46e7-85e1-a6422795902b`, then again after boot
+`74c8f741-b55d-4b85-954a-2f2b45030da8`. SELinux was enforcing. Direct PEM and
+public-key validation now makes repeat provisioning reuse the same helper key.
+The final rebuilt helper repeated the unattended start on boot
+`411d1d93-4625-476d-bf88-4e1d76581595`, with the package verifier enabled and
+SELinux enforcing.
+
+Current result: `--shizuku` provides unattended, device-local Shizuku shell
+privileges after reboot without rerunning GhostLock and without an always-on
+host. It does not provide persistent UID-0 root. The paired
+`--remove-shizuku` action removes its key and installed packages.

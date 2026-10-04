@@ -242,3 +242,30 @@ desired kiosk state on boots `0e5edea7-bb6d-4193-b050-dc6717236160` and
 `e278180d-2958-4c59-a008-05e2c441f125`: audio readbacks were zero, the OTA
 gate was false from `source: OVERRIDE`, and the unattended presence verifier
 passed. SELinux was enforcing after every verification reboot.
+
+## Device-local Shizuku
+
+The optional `--shizuku` action installs the pinned official Shizuku
+`13.6.0.r1086.2650830c` APK plus `dev.portal.shizukuhelper`. Android 10 does
+not support upstream Shizuku's automatic ADB-mode startup. The helper receives
+`BOOT_COMPLETED`, authenticates to the already persistent ADB listener at
+`127.0.0.1:5555` with a per-device key, and invokes Shizuku's installed native
+starter. The private key remains mode 0600 in the helper's application data;
+the exploit authorizes only its public key. This is Shizuku's normal UID 2000
+shell mode, not persistent root, and no host process is involved after setup.
+
+Meta's required `com.facebook.appverifier` rejects non-Meta certificates. The
+provisioner disables it only for each local package installation, restores its
+previous package state in a shell cleanup trap, then waits 15 seconds and calls
+`sync` before any reboot. The verifier was enabled and durable on clean boot
+`74c8f741-b55d-4b85-954a-2f2b45030da8`.
+
+The first formal two-boot run started `shizuku_server` as user `shell` on boot
+IDs `8c94eb85-cb0e-476d-af15-abd02e41d804` and
+`caa1c1cc-ef32-46e7-85e1-a6422795902b`. A further clean reboot to
+`74c8f741-b55d-4b85-954a-2f2b45030da8` again delivered the helper's normal
+boot receiver and started the server on its first loopback attempt with
+SELinux enforcing. The final rebuilt helper artifact repeated that result on
+boot `411d1d93-4625-476d-bf88-4e1d76581595`. Repeat installation read and
+reused the same private/public key pair. `--remove-shizuku` removes the
+authorized helper key, both packages, and any running server.

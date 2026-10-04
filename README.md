@@ -39,6 +39,11 @@ Meta's firmware do not normally allow.
   workloads while retaining the LED-free person-detection log consumed by
   Kiosk Satellite. The tested profile cut AIService CPU use by roughly half
   and includes an exact rollback.
+- **[Device-local Shizuku startup](#8-install-shizuku-with-automatic-startup):**
+  installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
+  manager and starts its service with Android's ADB-shell identity after every
+  reboot, giving compatible apps privileged APIs without rerunning the root
+  exploit or leaving another computer online.
 - **[Filtering Private DNS](#7-use-a-filtering-private-dns-resolver):** routes
   DNS through a user-selected DNS-over-TLS resolver, allowing unwanted Meta
   endpoints to be filtered without modifying system certificates or
@@ -79,9 +84,10 @@ process root credentials, and performs only the selected provisioning actions.
 
 Afterward, the device reboots normally. SELinux returns to enforcing, and the
 exploit does not install `su`, a root shell, or a general root daemon. Features
-that must survive reboot use narrowly scoped configuration files or the native
-audio watchdog installed by the privileged process. The provisioner then
-checks the requested behavior on two distinct boots.
+that must survive reboot use narrowly scoped configuration files, the native
+audio watchdog, or a dedicated loopback-ADB helper installed by the privileged
+process. The provisioner then checks the requested behavior on two distinct
+boots.
 
 Kernel exploitation is race-sensitive. An unsuccessful attempt may reboot or
 temporarily freeze the Portal; the provisioner retries from a clean boot. The
@@ -97,7 +103,9 @@ fingerprint does not match a supported target.
 - Android NDK r28.2 (`28.2.13676358`)
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
-  `d8` when using `--remove-meta-accounts`
+  `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku`
+- Internet access to download the pinned official Shizuku APK, or a local APK
+  supplied with `--shizuku-apk PATH`
 
 The Python provisioner uses only the standard library; there are no Python
 packages to install.
@@ -150,6 +158,7 @@ version if the installed `d8` is in a different directory.
 export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
 export NDK="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
 export ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-36/android.jar"
+export BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/37.0.0"
 export D8="$ANDROID_SDK_ROOT/build-tools/37.0.0/d8"
 ```
 
@@ -215,8 +224,7 @@ refuses to replace an existing Device Owner belonging to another application.
 
 ### 6. Run the provisioner
 
-For a dedicated Kiosk Satellite Portal using every currently supported
-customization, run:
+For the complete tested Kiosk Satellite profile, run:
 
 ```sh
 python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
@@ -225,7 +233,8 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
 
 The `kiosk` profile expands to the audio, Device Owner, update blocking,
 debloat, Meta-account removal, and presence optimization actions. You may add
-`--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering resolver.
+`--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering resolver,
+or `--shizuku` when apps on the Portal need Shizuku's shell-level APIs.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. A completed run ends with `PROVISION_OK` and two different boot IDs.
@@ -248,6 +257,7 @@ available rollback.
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
+| Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
 
 Flags can be combined in one command. Combining privileged actions performs
 them during the same successful exploit run and verifies all requested states
@@ -444,6 +454,49 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-privacy-dns
 ```
 
+### 8. Install Shizuku with automatic startup
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --shizuku
+```
+
+This downloads the pinned official Shizuku release, verifies its SHA-256
+digest, and installs it with a small Portal boot helper. Meta's required APK
+certificate verifier accepts only Meta-approved signing certificates, so the
+provisioner temporarily disables that verifier around the two local installs,
+restores its original state, waits for Package Manager to save it, and checks
+the result after reboot.
+
+The Portal runs Android 10, where upstream Shizuku cannot automatically start
+ADB mode after boot. The helper solves that limitation entirely on the device:
+it receives Android's normal boot broadcast, connects to the Portal's existing
+ADB daemon at `127.0.0.1:5555`, authenticates with a key generated for that
+Portal, and runs Shizuku's own starter. The temporary-root action authorizes
+only that public key. The host's ADB private key is never copied to the Portal.
+
+Shizuku runs as Android user `shell` (UID 2000), which is the normal Shizuku
+ADB privilege level; it is not a persistent UID-0 root service. Once
+installation completes, no host computer or network connection is needed for
+startup. Wireless ADB must remain enabled locally because the helper uses its
+loopback listener. The two-boot verifier requires `shizuku_server` to run as
+`shell` after both ordinary reboots.
+
+To use a Shizuku APK you downloaded yourself, run:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --shizuku --shizuku-apk ./shizuku.apk
+```
+
+Remove the manager, boot helper, running server, and the helper's authorized
+ADB key with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --remove-shizuku
+```
+
 ## Inspection, backups, and recovery
 
 ### Status report
@@ -457,8 +510,8 @@ python3 tools/provision_portal.py \
 
 The report includes exact target support, boot and SELinux state, Kiosk
 Satellite version and Device Owner state, audio and OTA markers, debloat and
-account status, the live presence pipeline, Private DNS, and the last
-provisioning manifest.
+account status, the live presence pipeline, Private DNS, Shizuku package and
+server state, and the last provisioning manifest.
 
 ### Dry-run planning
 
@@ -527,6 +580,7 @@ failure.
 - `exploit/`: GhostLock source, privileged provisioning actions, and
   exact-build target definitions
 - `helper/`: persistent native audio watchdog and the earlier helper APK
+- `shizuku-helper/`: device-local loopback-ADB launcher for Shizuku
 - `tools/provision_portal.py`: user-facing build, installation, retry, and
   two-reboot verification tool
 - `tools/portal_targets.py`: exact model and firmware registry used before any
