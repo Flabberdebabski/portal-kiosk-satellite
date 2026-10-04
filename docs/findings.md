@@ -1089,3 +1089,16 @@ watcher found no collision. The allocator class now matches; the remaining
 failure is returning the target SLUB page to the buddy allocator.
 
 Current result: hardware echo cancellation remains enabled.
+
+107. The persistent reclaim miss came from inherited slab geometry, not the
+allocator search. `mm_struct` is 896 bytes and the device exposes 16 possible
+CPUs. In the exact Portal 4.9 `calculate_order()` implementation, the default
+minimum is `4 * (fls(16) + 1) = 24` objects. An order-2 slab holds only 18,
+while an order-3 slab holds 36 and passes the waste test, so SLUB selects
+order 3. The previous `MM_ORDER=2` grooming isolated only half of the actual
+32 KiB slab and necessarily left live objects in the other half. The target
+can never reach buddy in that state. The geometry is now corrected to order 3;
+the existing UNIX stream page-fragment path can request and retain a matching
+32 KiB compound allocation.
+
+Current result: hardware echo cancellation remains enabled.
