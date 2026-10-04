@@ -1201,3 +1201,46 @@ parameters on boot IDs `30d9a2c6-9bd2-4ec7-bd6c-88ccf915f266` and
 to `5` six seconds after initial verification; the startup cadence corrected it
 to `0` on the following pass. The live AI service is PID 3511 and the ordinary
 APK helper remains uninstalled.
+
+116. Kiosk Satellite version `2026.10.6` is installed as
+`me.jxl.kiosk_satellite`, and
+`me.jxl.kiosk_satellite/.KioskAdminReceiver` was already an enabled admin for
+user 0. Normal `dpm set-device-owner` provisioning is blocked by the Portal's
+four existing Meta accounts. Exact Android 10 framework inspection confirmed
+that the owner state is stored in `/data/system/device_owner_2.xml`, while the
+system user's active-admin policy is `/data/system/device_policies.xml`.
+
+117. Added a guarded privileged Device Owner action to the existing exploit.
+It refuses to proceed unless the Kiosk package and receiver are present in the
+active-admin policy, refuses any different existing owner file, and snapshots
+the original policy under
+`/data/local/tmp/portal-device-owner-backup/device_policies.xml`. Because no
+owner file existed, it also records that fact in `device_owner_2.absent`. The
+action creates a mode-0600 owner file with the policy file's system ownership
+and SELinux label, syncs it, commits it by atomic rename, and syncs the parent
+directory. An initial guarded run used the per-user policy path and stopped at
+the active-admin check without writing an owner file; changing it to Android
+10's system-user path resolved the check.
+
+118. GhostLock attempt 3 obtained the arbitrary read/write primitive and
+temporary root, refreshed the already-installed audio watchdog, and logged
+`kiosk device owner install ... already=0 ... ok=1`. After reboot to boot ID
+`31327449-dca9-47ab-919c-8608945b6eb1`, DevicePolicyManager reported Kiosk
+Satellite as Device Owner for user 0 and `ro.device_owner=true`. Android also
+applied the owner's default `no_add_managed_profile` restriction. The original
+four Meta accounts remained present.
+
+119. A second normal reboot changed the boot ID to
+`73b06f93-35bc-47f5-bb99-ff324ca27c7e`. Kiosk Satellite remained Device Owner,
+`ro.device_owner` remained `true`, and the independently started audio
+watchdog again read back AEC 3001 and NS mode 4001 as zero. The host verifier
+now accepts Android's normalized
+`ComponentInfo{package/package.Class}` owner spelling as well as the shorthand
+admin spelling. A subsequent `--device-owner` run took the idempotent
+already-owner path and neither invoked the exploit nor rewrote policy. The
+retry harness also now requires a completed boot with a different boot ID
+after every attempt, preventing reuse of stale kernel state.
+
+Current result: Kiosk Satellite is the persistent Device Owner for user 0;
+hardware AEC and residual-echo suppression remain disabled across boot and
+wireless ADB remains persistent.

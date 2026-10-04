@@ -58,6 +58,26 @@ fresh binaries, derives that boot's randomized kernel addresses, retries the
 GhostLock reclaim if needed, and verifies the watchdog across two distinct
 reboots. Attempt logs are written to a timestamped directory under `/tmp`.
 
+To provision the already-active Kiosk Satellite admin as Android's Device
+Owner at the same time, add `--device-owner`:
+
+```sh
+python3 tools/install_audio_persistence.py \
+  --serial 192.168.1.72:5555 --device-owner
+```
+
+Android's normal `dpm set-device-owner` command rejects this Portal because it
+already has Meta accounts. The privileged action instead installs the Android
+10 owner record only after confirming that
+`me.jxl.kiosk_satellite/.KioskAdminReceiver` is an active admin and that no
+other owner record exists. It snapshots the original policy under
+`/data/local/tmp/portal-device-owner-backup`, preserves the system policy
+file's ownership and SELinux label, and commits the owner file with `fsync`
+and an atomic rename. The installer then requires DevicePolicyManager to report
+Kiosk Satellite as owner of user 0 and `ro.device_owner=true` after two
+distinct boots. A later run recognizes the existing owner and exits without
+rewriting it or invoking the exploit.
+
 The persistent files are placed in the AI service's private
 `lib-compressed` directory. `libcoldstart_1.so` has its `libdl.so` dependency
 slot changed to the equal-length name `libpa.so`; the original is retained as
@@ -79,5 +99,13 @@ watchdog detected the change and restored it to `0` on its next pass. It checks
 once per second during startup and for 30 clean passes after any correction,
 then every five seconds in steady state. This demonstrates both boot
 persistence and repair of later service-side rewrites.
+
+On October 4, 2026, Kiosk Satellite version `2026.10.6` was also provisioned
+as Device Owner for user 0. Android loaded it as
+`ComponentInfo{me.jxl.kiosk_satellite/me.jxl.kiosk_satellite.KioskAdminReceiver}`
+and set `ro.device_owner=true`. That state survived normal reboots with boot
+IDs `31327449-dca9-47ab-919c-8608945b6eb1` and
+`73b06f93-35bc-47f5-bb99-ff324ca27c7e`. All four pre-existing Meta accounts
+remain installed and unchanged.
 
 This code is tied to the fingerprint and kernel listed above. A mismatch can panic the device.

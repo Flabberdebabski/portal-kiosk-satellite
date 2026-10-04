@@ -70,6 +70,33 @@ that the helper handles both reboot persistence and later parameter rewrites.
 The obsolete ordinary APK helper was removed after native persistence was
 verified. Acoustic A/B capture remains to be measured.
 
+Kiosk Satellite is now Android's Device Owner for system user 0. The installed
+package is `me.jxl.kiosk_satellite` version `2026.10.6` and its active admin is
+`.KioskAdminReceiver`. Normal `dpm set-device-owner` provisioning could not be
+used because the Portal already contains four Meta accounts. The optional
+`--device-owner` installer action therefore writes Android 10's
+`/data/system/device_owner_2.xml` from the temporary privileged process, but
+only after verifying the active admin in `/data/system/device_policies.xml`
+and refusing any pre-existing different owner.
+
+Before the write, the installer saves the original policy and a marker that
+the owner file was absent under
+`/data/local/tmp/portal-device-owner-backup`. It copies the policy file's
+system ownership and SELinux label to a mode-0600 temporary owner file, calls
+`fsync`, atomically renames it, and syncs `/data/system`. DevicePolicyManager
+then loaded the owner on boot and applied its default
+`no_add_managed_profile` restriction. The four existing Meta accounts were not
+removed or modified.
+
+The loaded owner was verified with both `dumpsys device_policy` and
+`ro.device_owner=true` after boot IDs
+`31327449-dca9-47ab-919c-8608945b6eb1` and
+`73b06f93-35bc-47f5-bb99-ff324ca27c7e`. The latter boot also independently
+verified the audio watchdog. The installer recognizes both Android's shorthand
+component spelling and its normalized `ComponentInfo{package/package.Class}`
+spelling, so repeated `--device-owner` runs are idempotent and do not launch
+the exploit once ownership is established.
+
 An optional privileged action writes `persist.adb.tcp.port=5555` directly to
 Android's protobuf persistent-property store and sets the live
 `service.adb.tcp.port` property. The direct write preserves the property's
