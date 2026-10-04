@@ -1022,3 +1022,14 @@ uses later frees to overflow CPU partial storage before KGSL's next reclaim
 stage.
 
 Current result: hardware echo cancellation remains enabled.
+
+101. The first cache-cycle test was stopped before the vulnerable trigger. It
+started the 576 refill processes after preallocating and faulting the 256 MiB
+proc_uid gate through 256 VMAs, so every clone copied an enormous page-table
+footprint and made the device unresponsive. Refill tasks are now killed and
+reaped individually as soon as `/proc/<pid>/mem` pins their `mm_struct`, and
+proc_uid gate construction is deferred until after cache cycling and KGSL
+reclaim. At that point KGSL owns any captured page, while the gate still exists
+before the proc-lock trigger.
+
+Current result: hardware echo cancellation remains enabled.

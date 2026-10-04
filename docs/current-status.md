@@ -66,7 +66,10 @@ shows the target remains in the `mm_struct` cache. An optional cache-cycle now
 refills the old partial slabs with fresh address spaces, moves allocation to
 later slabs, and frees the fresh objects in order. The later frees overflow
 CPU partial storage after the target becomes an early empty slab; KGSL then
-runs at this additional discard boundary.
+runs at this additional discard boundary. The first test placed this cycle
+after the large proc_uid gate and was stopped when clone page-table copying
+made the device unresponsive. Refill tasks are now reaped one at a time, and
+the proc_uid gate is built only after cache cycling and KGSL capture.
 
 After that checkpoint, the remaining sequence is:
 
