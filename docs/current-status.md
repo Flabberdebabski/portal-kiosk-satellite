@@ -34,6 +34,11 @@ the fake object graph into every mapping, and inspects offset `0x1008` after
 the scheduler write. A clean collision is therefore directly observable
 before any ashmem open.
 
+The first corrected sendmmsg run returned zero from `sched_setattr`. It then
+spent 0.38 seconds on the obsolete socket scan and the finite ext4 gate expired
+before the KGSL verifier ran. The verifier now checks KGSL first and the gate
+size is configurable for a longer post-write interval.
+
 After that checkpoint, the remaining sequence is:
 
 1. Complete the held KGSL collision verification on the next responsive boot.

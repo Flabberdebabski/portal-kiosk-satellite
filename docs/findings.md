@@ -626,6 +626,7 @@ prove that rb_erase performed its constrained write.
 Current result: hardware echo cancellation remains enabled.
 
 
+
 68. The first scratch completion used a forged waiter priority of 139, which
 could match the WAIT_REQUEUE_PI task after nice 19 and let rt_mutex_adjust_pi
 return before rb_erase. A live fops attempt with priority 139 confirmed that
@@ -942,5 +943,15 @@ selected the old sigreturn route because the stack-route environment variable
 was omitted; it was interrupted before a scheduler write. A parent-death
 signal now prevents future ADB interruptions from leaving the gate child
 orphaned.
+
+Current result: hardware echo cancellation remains enabled.
+
+94. The corrected sendmmsg/KGSL run reached the vulnerable scheduler path and
+`sched_setattr` returned zero. The child then spent about 0.38 seconds scanning
+the legacy socket queue; the finite ext4 gate expired and the legitimate
+waiter rebooted the device before the KGSL mapping scan began. The KGSL scan
+now runs first and skips the socket queue by default. The proc_uid gate also
+accepts a larger backing-file size so the held interval can be extended for
+post-write verification.
 
 Current result: hardware echo cancellation remains enabled.
