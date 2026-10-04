@@ -1,11 +1,12 @@
 # Meta Portal Root and Provisioning for Kiosk Satellite
 
-This project prepares abandoned Meta Portal devices for use with Kiosk
-Satellite. It provides a guarded, command-line provisioner for system changes
-that Android and Meta's firmware do not normally allow, including disabling
-hardware echo cancellation, making Kiosk Satellite the Device Owner, blocking
-firmware updates, removing unused Meta software and accounts, and reducing
-AIService CPU use without losing the Portal's LED-free presence detector.
+This project prepares abandoned Meta Portal devices for use with
+[Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite). It provides a
+guarded, command-line provisioner for system changes that Android and Meta's
+firmware do not normally allow, including disabling hardware echo cancellation,
+making Kiosk Satellite the Device Owner, blocking firmware updates, removing
+unused Meta software and accounts, and reducing AIService CPU use without
+losing the Portal's LED-free presence detector.
 
 Support is intentionally build-specific. One Portal Go firmware is currently
 supported; the repository is organized so more Portal models and firmware
@@ -13,12 +14,13 @@ builds can be added as their kernel layouts and system services are verified.
 
 ## How the root exploit works
 
-The project adapts GhostLock, CVE-2026-43499, to a specific Portal kernel. The
-host provisioner confirms the device model and full firmware fingerprint,
-reboots into a clean state, derives the randomized kernel addresses for that
-boot, and starts the exploit through a staged native library. The exploit
-obtains temporary kernel read/write access, gives its own process root
-credentials, and performs only the selected provisioning actions.
+The project adapts GhostLock,
+[CVE-2026-43499](https://www.cve.org/CVERecord?id=CVE-2026-43499), to a
+specific Portal kernel. The host provisioner confirms the device model and full
+firmware fingerprint, reboots into a clean state, derives the randomized kernel
+addresses for that boot, and starts the exploit through a staged native
+library. The exploit obtains temporary kernel read/write access, gives its own
+process root credentials, and performs only the selected provisioning actions.
 
 Afterward, the device reboots normally. SELinux returns to enforcing, and the
 exploit does not install `su`, a root shell, or a general root daemon. Features
