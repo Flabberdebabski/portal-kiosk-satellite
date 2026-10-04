@@ -144,9 +144,14 @@ only enabled for the current boot.
 
 ### 5. Prepare Kiosk Satellite
 
-Install Kiosk Satellite and open it once. If Kiosk Satellite will become the
-Device Owner, enable its device-admin receiver through its setup flow first.
-You can inspect the loaded policy with:
+Download and install Kiosk Satellite manually from the
+[Kiosk Satellite repository](https://github.com/jxlarrea/kiosk-satellite), then
+open it once. The provisioner deliberately does not download, install, or
+update the Kiosk Satellite APK. This keeps application releases under the
+user's control.
+
+If Kiosk Satellite will become the Device Owner, enable its device-admin
+receiver through its setup flow first. You can inspect the loaded policy with:
 
 ```sh
 adb -s "$PORTAL_IP:5555" shell dumpsys device_policy
@@ -163,13 +168,12 @@ customization, run:
 
 ```sh
 python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
-  --audio \
-  --device-owner \
-  --disable-updates \
-  --debloat \
-  --remove-meta-accounts \
-  --optimize-presence
+  --profile kiosk
 ```
+
+The `kiosk` profile expands to the audio, Device Owner, update blocking,
+debloat, Meta-account removal, and presence optimization actions. You may add
+`--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering resolver.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. A completed run ends with `PROVISION_OK` and two different boot IDs.
@@ -184,12 +188,14 @@ available rollback.
 
 | Action | Flag | Uses root | Automated rollback |
 | --- | --- | --- | --- |
-| Disable hardware audio processing | `--audio` | Yes | No |
+| Apply the complete tested kiosk profile | `--profile kiosk` | Yes | Use the individual rollback flags |
+| Disable hardware audio processing | `--audio` | Yes | `--restore-audio` |
 | Make Kiosk Satellite Device Owner | `--device-owner` | Yes, on first setup | No |
-| Disable automatic firmware updates | `--disable-updates` | Yes | No |
+| Disable automatic firmware updates | `--disable-updates` | Yes | `--enable-updates` |
 | Disable unused Meta applications | `--debloat` | No | `--restore-bloat` |
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
+| Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
 
 Flags can be combined in one command. Combining privileged actions performs
 them during the same successful exploit run and verifies all requested states
@@ -214,8 +220,18 @@ AIService and keeps these private DSP parameters at zero:
 The change is system-wide, so every Android application receives audio without
 those two processing stages. The watchdog reapplies the values after AIService
 starts and repairs later firmware-side changes. The provisioner confirms both
-readbacks on two boots. There is currently no provisioner flag to uninstall
-the audio watchdog.
+readbacks on two boots.
+
+Restore Meta's original AIService loader, remove the watchdog, and restore the
+firmware's AEC and NS parameter defaults with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-audio
+```
+
+The restore uses the original loader saved during the first installation and
+refuses to replace an unrelated file.
 
 ### 2. Make Kiosk Satellite the Device Owner
 
@@ -251,8 +267,14 @@ does not discover or install firmware.
 The provisioner verifies the disabled packages and requires Meta's own service
 to report the value from the local override on two boots. It refuses to replace
 an unrelated existing override. The original file state is recorded under
-`/data/local/tmp/portal-ota-backup`. There is currently no automated restore
-flag for the OTA configuration.
+`/data/local/tmp/portal-ota-backup`.
+
+Restore that exact override state and re-enable both OTA packages with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --enable-updates
+```
 
 ### 4. Disable unused Meta applications
 
@@ -349,6 +371,77 @@ python3 tools/provision_portal.py \
 The installer and restore action use atomic file replacement, preserve the
 app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
 
+### 7. Use a filtering Private DNS resolver
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --privacy-dns dns.example.net
+```
+
+Replace `dns.example.net` with the DNS-over-TLS hostname of a resolver you
+control or trust. The provisioner configures Android's strict Private DNS mode;
+the resolver supplies the block list. This can reduce connections to unwanted
+Meta endpoints without modifying system certificates or installing a broad
+root firewall. Confirm that the resolver permits the services Kiosk Satellite
+needs before applying it fleet-wide.
+
+The first run saves both original Android settings. Restore them with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-privacy-dns
+```
+
+## Inspection, backups, and recovery
+
+Print a read-only JSON report without exploiting or rebooting the Portal:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --status
+```
+
+The report includes exact target support, boot and SELinux state, Kiosk
+Satellite version and Device Owner state, audio and OTA markers, debloat and
+account status, the live presence pipeline, Private DNS, and the last
+provisioning manifest.
+
+Preview an action or the full profile without changing the device:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --profile kiosk --dry-run
+```
+
+The plan identifies required build outputs, host tools, exploit use, estimated
+minimum reboots, and the current state. Create a private diagnostic and
+configuration archive before making changes with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --backup ./backups
+```
+
+`--backup` may also accompany a provisioning command. The resulting mode-0600
+archive contains status, relevant Android service dumps, reversible device
+snapshots, and a SHA-256 manifest. It can contain account names and device
+configuration, so store it as sensitive data.
+
+Every mutating run writes a state manifest at
+`/data/local/tmp/portal-provision-state-v1.json`. It records the exact target,
+firmware fingerprint, selected actions, Git revision, artifact hashes, state,
+and verification boot IDs. If power or the host fails during a run, reconnect
+ADB and resume the pending action set with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --recover
+```
+
+Recovery first removes stale staged files. It resumes only a validated pending
+manifest; for a completed run or a device with no manifest, it prints status
+and exits without changing the configuration.
+
 ## Running and troubleshooting
 
 The default maximum is 12 exploit attempts. Change it with `--attempts N`,
@@ -375,6 +468,8 @@ failure.
 - `helper/`: persistent native audio watchdog and the earlier helper APK
 - `tools/provision_portal.py`: user-facing build, installation, retry, and
   two-reboot verification tool
+- `tools/portal_targets.py`: exact model and firmware registry used before any
+  build-specific kernel write
 - `tools/PortalAccountCtl.java`: privileged local-account cleanup helper
 - `analysis/`: kernel offset extraction and device-analysis utilities
 - `docs/current-status.md`: current implementation and validation details

@@ -1,33 +1,36 @@
 #!/usr/bin/env python3
-"""Provision and verify persistent Portal Go system customizations."""
+"""Inspect, provision, recover, and verify supported Meta Portal devices."""
 
 from __future__ import annotations
 
 import argparse
 import collections
 import datetime as dt
+import hashlib
+import json
 import pathlib
 import re
 import select
 import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import zipfile
 
+from portal_targets import PortalTarget, find_target
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-EXPECTED_FINGERPRINT = (
-    "Facebook/terry_prod/terry:10/QKQ1.210213.001/"
-    "5051355900018050:user/prod-keys"
-)
-PRELOAD_LOCAL = ROOT / "exploit/build/preload-portal-terry-5051355900018050.so"
 HELPER_LOCAL = ROOT / "helper/build/libportal_audio_persist.so"
 PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
 ACCOUNT_CTL_LOCAL = ROOT / "exploit/build/portal-account-ctl.jar"
 ACCOUNT_CTL_REMOTE = "/data/local/tmp/portal-account-ctl.jar"
+STATE_REMOTE = "/data/local/tmp/portal-provision-state-v1.json"
+PRIVACY_BACKUP_REMOTE = "/data/local/tmp/portal-private-dns-before-v1.json"
 KIOSK_COMPONENT = "me.jxl.kiosk_satellite/.KioskAdminReceiver"
 KIOSK_OWNER_COMPONENTS = (
     "admin=me.jxl.kiosk_satellite/.KioskAdminReceiver",
@@ -84,28 +87,45 @@ class PortalProvisioner:
         attempts: int,
         log_dir: pathlib.Path,
         audio: bool = False,
+        restore_audio: bool = False,
         device_owner: bool = False,
         disable_updates: bool = False,
+        enable_updates: bool = False,
         debloat: bool = False,
         restore_bloat: bool = False,
         remove_meta_accounts: bool = False,
         optimize_presence: bool = False,
         restore_presence_profile: bool = False,
+        privacy_dns: str | None = None,
+        restore_privacy_dns: bool = False,
+        status_only: bool = False,
+        dry_run: bool = False,
+        backup_path: pathlib.Path | None = None,
+        recover: bool = False,
         skip_build: bool = False,
     ):
         self.serial = serial
         self.attempts = attempts
         self.log_dir = log_dir
         self.audio = audio
+        self.restore_audio = restore_audio
         self.device_owner = device_owner
         self.disable_updates = disable_updates
+        self.enable_updates = enable_updates
         self.debloat = debloat
         self.restore_bloat = restore_bloat
         self.remove_meta_accounts = remove_meta_accounts
         self.optimize_presence = optimize_presence
         self.restore_presence_profile = restore_presence_profile
+        self.privacy_dns = privacy_dns
+        self.restore_privacy_dns = restore_privacy_dns
+        self.status_only = status_only
+        self.dry_run = dry_run
+        self.backup_path = backup_path
+        self.recover = recover
         self.skip_build = skip_build
         self.adb = ["adb", "-s", serial]
+        self.target: PortalTarget | None = None
 
     @staticmethod
     def run(
@@ -201,24 +221,36 @@ class PortalProvisioner:
             f"last boot ID was {last_boot_id!r}"
         )
 
-    def verify_target(self) -> None:
+    def verify_target(self, require_supported: bool = True) -> PortalTarget | None:
         fingerprint = self.adb_run(
             ["shell", "getprop", "ro.build.fingerprint"], timeout=5, check=True
         ).stdout.strip()
-        if fingerprint != EXPECTED_FINGERPRINT:
-            raise ProvisionError(
-                "unsupported firmware; refusing build-specific kernel writes\n"
-                f"expected: {EXPECTED_FINGERPRINT}\nactual:   {fingerprint}"
-            )
-        model = self.adb_run(
+        device = self.adb_run(
             ["shell", "getprop", "ro.product.device"], timeout=5, check=True
         ).stdout.strip()
-        if model != "terry":
-            raise ProvisionError(f"unsupported device: {model!r}")
-        print(f"TARGET_OK serial={self.serial} device={model} fingerprint={fingerprint}")
+        target = find_target(device, fingerprint)
+        self.target = target
+        if target is None and require_supported:
+            raise ProvisionError(
+                "unsupported firmware; refusing build-specific kernel writes\n"
+                f"device: {device}\nfingerprint: {fingerprint}"
+            )
+        if target is None:
+            print(
+                f"TARGET_UNSUPPORTED serial={self.serial} device={device} "
+                f"fingerprint={fingerprint}"
+            )
+        else:
+            print(
+                f"TARGET_OK serial={self.serial} target={target.key} "
+                f"device={device} fingerprint={fingerprint}"
+            )
+        return target
 
     def stage(self) -> None:
-        files = [(PRELOAD_LOCAL, PRELOAD_REMOTE)]
+        if self.target is None:
+            raise ProvisionError("target must be selected before staging")
+        files = [(self.target.preload_path(ROOT), PRELOAD_REMOTE)]
         if self.audio:
             files.append((HELPER_LOCAL, HELPER_REMOTE))
         if self.remove_meta_accounts:
@@ -234,6 +266,612 @@ class PortalProvisioner:
         if self.remove_meta_accounts:
             staged += f" account_ctl={ACCOUNT_CTL_REMOTE}"
         print(f"STAGED {staged}")
+
+    def requested_actions(self) -> dict[str, object]:
+        actions: dict[str, object] = {}
+        for name in (
+            "audio",
+            "restore_audio",
+            "device_owner",
+            "disable_updates",
+            "enable_updates",
+            "debloat",
+            "restore_bloat",
+            "remove_meta_accounts",
+            "optimize_presence",
+            "restore_presence_profile",
+            "restore_privacy_dns",
+        ):
+            if getattr(self, name):
+                actions[name] = True
+        if self.privacy_dns:
+            actions["privacy_dns"] = self.privacy_dns
+        return actions
+
+    def tool_revision(self) -> str:
+        result = self.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], timeout=5
+        )
+        if result.returncode != 0:
+            return "unknown"
+        revision = result.stdout.strip()
+        dirty = self.run(
+            ["git", "-C", str(ROOT), "status", "--porcelain"], timeout=5
+        )
+        if dirty.returncode == 0 and dirty.stdout.strip():
+            revision += "-dirty"
+        return revision
+
+    def selected_artifact_hashes(self) -> dict[str, str]:
+        candidates = [pathlib.Path(__file__).resolve(), ROOT / "tools/portal_targets.py"]
+        if self.target:
+            candidates.append(self.target.preload_path(ROOT))
+        if self.audio:
+            candidates.append(HELPER_LOCAL)
+        if self.remove_meta_accounts:
+            candidates.append(ACCOUNT_CTL_LOCAL)
+        hashes: dict[str, str] = {}
+        for path in candidates:
+            if path.is_file():
+                try:
+                    name = str(path.relative_to(ROOT))
+                except ValueError:
+                    name = str(path)
+                hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return hashes
+
+    def read_state(self) -> dict[str, object] | None:
+        result = self.adb_run(["shell", "cat", STATE_REMOTE], timeout=5)
+        if result.returncode != 0:
+            return None
+        try:
+            state = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ProvisionError(f"invalid device state manifest: {exc}") from exc
+        if not isinstance(state, dict) or state.get("schema") != 1:
+            raise ProvisionError("unrecognized device state manifest")
+        return state
+
+    def write_state(
+        self,
+        state_status: str,
+        first_boot: str | None = None,
+        second_boot: str | None = None,
+    ) -> None:
+        fingerprint = self.adb_run(
+            ["shell", "getprop", "ro.build.fingerprint"], timeout=5, check=True
+        ).stdout.strip()
+        state = {
+            "schema": 1,
+            "status": state_status,
+            "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "serial": self.serial,
+            "target": self.target.key if self.target else None,
+            "fingerprint": fingerprint,
+            "tool_revision": self.tool_revision(),
+            "artifact_sha256": self.selected_artifact_hashes(),
+            "actions": self.requested_actions(),
+            "verification": {
+                "first_boot": first_boot,
+                "second_boot": second_boot,
+            },
+        }
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        local = self.log_dir / "portal-provision-state-v1.json"
+        local.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+        local.chmod(0o600)
+        remote_tmp = STATE_REMOTE + ".tmp"
+        self.adb_run(["push", str(local), remote_tmp], timeout=15, check=True)
+        self.adb_run(
+            [
+                "shell",
+                f"chmod 0600 {shlex.quote(remote_tmp)} && "
+                f"mv {shlex.quote(remote_tmp)} {shlex.quote(STATE_REMOTE)}",
+            ],
+            timeout=10,
+            check=True,
+        )
+        print(f"STATE_MANIFEST status={state_status} path={STATE_REMOTE}")
+
+    def collect_status(self) -> dict[str, object]:
+        def shell(*arguments: str, timeout: int = 15) -> str:
+            return self.adb_run(
+                ["shell", *arguments], timeout=timeout
+            ).stdout.strip()
+
+        def exists(path: str) -> bool:
+            return self.adb_run(
+                ["shell", "test", "-f", path], timeout=5
+            ).returncode == 0
+
+        fingerprint = shell("getprop", "ro.build.fingerprint", timeout=5)
+        device = shell("getprop", "ro.product.device", timeout=5)
+        target = find_target(device, fingerprint)
+        disabled_output = shell("pm", "list", "packages", "-d")
+        disabled = {
+            line.removeprefix("package:").strip()
+            for line in disabled_output.splitlines()
+            if line.startswith("package:")
+        }
+        installed_output = shell("pm", "list", "packages")
+        installed = {
+            line.removeprefix("package:").strip()
+            for line in installed_output.splitlines()
+            if line.startswith("package:")
+        }
+        policy = shell("dumpsys", "device_policy")
+        owner = "Device Owner:" in policy and any(
+            marker in policy for marker in KIOSK_OWNER_COMPONENTS
+        )
+        kiosk_dump = shell("dumpsys", "package", "me.jxl.kiosk_satellite")
+        version_name = re.search(r"\bversionName=([^\s]+)", kiosk_dump)
+        version_code = re.search(r"\bversionCode=(\d+)", kiosk_dump)
+        logs = shell("logcat", "-d", "-v", "brief", timeout=20)
+        audio_logs = shell("logcat", "-d", "-s", "PortalAudioPersist:*", timeout=10)
+        camera = shell("dumpsys", "media.camera", timeout=20)
+        webview = shell("dumpsys", "webviewupdate", timeout=15)
+        accounts = self.meta_accounts()
+        authenticators = self.disabled_meta_authenticators()
+        ota_dump = shell("dumpsys", "facebook.aloha.otaservice", timeout=15)
+        private_dns_mode = shell("settings", "get", "global", "private_dns_mode")
+        private_dns_host = shell(
+            "settings", "get", "global", "private_dns_specifier"
+        )
+        manifest: object
+        try:
+            manifest = self.read_state()
+        except ProvisionError as exc:
+            manifest = {"error": str(exc)}
+        profile_keys = sorted(
+            key
+            for key in PRESENCE_PROFILE_KEYS
+            if any(
+                "settings_config.xml" in line
+                and key in line
+                and re.search(r"\bfalse\b", line, re.IGNORECASE)
+                for line in logs.splitlines()
+            )
+        )
+        audio_installed = exists(
+            "/data/local/tmp/portal-audio-backup/installed-v1"
+        )
+        audio_restored = exists(
+            "/data/local/tmp/portal-audio-backup/restored-v1"
+        )
+        ota_installed = exists("/data/local/tmp/portal-ota-backup/installed-v1")
+        ota_restored = exists("/data/local/tmp/portal-ota-backup/restored-v1")
+        presence_installed = exists(
+            "/data/local/tmp/portal-presence-backup/installed-v1"
+        )
+        presence_restored = exists(
+            "/data/local/tmp/portal-presence-backup/restored-v1"
+        )
+        return {
+            "schema": 1,
+            "serial": self.serial,
+            "target": {
+                "supported": target is not None,
+                "key": target.key if target else None,
+                "device": device,
+                "fingerprint": fingerprint,
+            },
+            "runtime": {
+                "boot_id": shell("cat", "/proc/sys/kernel/random/boot_id", timeout=5),
+                "selinux": shell("getenforce", timeout=5),
+                "wireless_adb_port": shell("getprop", "persist.adb.tcp.port", timeout=5),
+                "aiservice_pid": shell(
+                    "pidof", "com.facebook.portal.aiservice", timeout=5
+                ),
+                "cameras": 2 if "Number of camera devices: 2" in camera else None,
+                "webview_ready": "(com.facebook.portal.webview," in webview,
+            },
+            "kiosk_satellite": {
+                "installed": "me.jxl.kiosk_satellite" in installed,
+                "version_name": version_name.group(1) if version_name else None,
+                "version_code": int(version_code.group(1)) if version_code else None,
+                "admin_active": f"    {KIOSK_COMPONENT}:" in policy,
+                "device_owner": owner,
+            },
+            "audio": {
+                "state": (
+                    "installed"
+                    if audio_installed
+                    else "restored"
+                    if audio_restored
+                    else "observed_this_boot"
+                    if "persistent audio watchdog started" in audio_logs
+                    else "unknown"
+                ),
+                "installed_marker": audio_installed,
+                "watchdog_observed": "persistent audio watchdog started" in audio_logs,
+                "processing_zero_observed": (
+                    "audio processing verified aec=0 ns=0" in audio_logs
+                ),
+                "restored_marker": audio_restored,
+            },
+            "updates": {
+                "state": (
+                    "blocked"
+                    if ota_installed
+                    or (
+                        all(
+                            package in disabled
+                            for package in (
+                                "com.facebook.aloha.otaui",
+                                "com.facebook.aloha.alohaotasetup",
+                            )
+                        )
+                        and "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
+                    )
+                    else "restored"
+                    if ota_restored
+                    else "unknown"
+                ),
+                "installed_marker": ota_installed,
+                "packages_disabled": all(
+                    package in disabled
+                    for package in (
+                        "com.facebook.aloha.otaui",
+                        "com.facebook.aloha.alohaotasetup",
+                    )
+                ),
+                "firmware_gate_false": (
+                    "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
+                ),
+                "restored_marker": ota_restored,
+            },
+            "debloat": {
+                "disabled": sorted(set(DEBLOAT_PACKAGES) & disabled),
+                "complete": all(
+                    package not in installed or package in disabled
+                    for package in DEBLOAT_PACKAGES
+                ),
+            },
+            "meta_accounts": {
+                "remaining": len(accounts),
+                "authenticators_disabled": len(
+                    set(META_AUTHENTICATOR_COMPONENTS) & authenticators
+                ),
+            },
+            "presence": {
+                "state": (
+                    "optimized"
+                    if presence_installed or len(profile_keys) == len(PRESENCE_PROFILE_KEYS)
+                    else "restored"
+                    if presence_restored
+                    else "unknown"
+                ),
+                "installed_marker": presence_installed,
+                "restored_marker": presence_restored,
+                "profile_keys_loaded": profile_keys,
+                "analysis_frames_observed": PRESENCE_ANALYSIS_FRAME_MARKER in logs,
+                "roi_frames_observed": PRESENCE_ROI_FRAME_MARKER in logs,
+                "presence_event_observed": PRESENCE_LOG_MARKER in logs,
+            },
+            "privacy_dns": {
+                "mode": None if private_dns_mode == "null" else private_dns_mode,
+                "hostname": None if private_dns_host == "null" else private_dns_host,
+                "backup_present": self.adb_run(
+                    ["shell", "test", "-f", PRIVACY_BACKUP_REMOTE], timeout=5
+                ).returncode
+                == 0,
+            },
+            "provision_manifest": manifest,
+        }
+
+    def print_status(self) -> dict[str, object]:
+        status = self.collect_status()
+        rendered = json.dumps(status, indent=2, sort_keys=True)
+        print(rendered)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        (self.log_dir / "status.json").write_text(rendered + "\n")
+        return status
+
+    def privileged_requested(self) -> bool:
+        return any(
+            (
+                self.audio,
+                self.restore_audio,
+                self.device_owner,
+                self.disable_updates,
+                self.enable_updates,
+                self.remove_meta_accounts,
+                self.optimize_presence,
+                self.restore_presence_profile,
+            )
+        )
+
+    def dry_run_report(self, status: dict[str, object]) -> None:
+        actions = self.requested_actions()
+        kiosk = status.get("kiosk_satellite", {})
+        audio = status.get("audio", {})
+        updates = status.get("updates", {})
+        debloat = status.get("debloat", {})
+        accounts = status.get("meta_accounts", {})
+        presence = status.get("presence", {})
+        privacy = status.get("privacy_dns", {})
+        current = {
+            "audio": audio.get("state") if isinstance(audio, dict) else None,
+            "device_owner": (
+                kiosk.get("device_owner") if isinstance(kiosk, dict) else None
+            ),
+            "updates": updates.get("state") if isinstance(updates, dict) else None,
+            "debloat": debloat.get("complete") if isinstance(debloat, dict) else None,
+            "meta_accounts_remaining": (
+                accounts.get("remaining") if isinstance(accounts, dict) else None
+            ),
+            "presence": presence.get("state") if isinstance(presence, dict) else None,
+            "privacy_dns": privacy if isinstance(privacy, dict) else None,
+        }
+        required_outputs = []
+        if self.target:
+            required_outputs.append(str(self.target.preload_path(ROOT)))
+        if self.audio:
+            required_outputs.append(str(HELPER_LOCAL))
+        if self.remove_meta_accounts:
+            required_outputs.append(str(ACCOUNT_CTL_LOCAL))
+        report = {
+            "actions": actions,
+            "current": current,
+            "requires_exploit": self.privileged_requested(),
+            "minimum_reboots": 3 if self.privileged_requested() else 2,
+            "host_tools": {
+                name: shutil.which(name) is not None
+                for name in ("adb", "git", "make", "python3")
+            },
+            "build_outputs": {
+                path: pathlib.Path(path).is_file() for path in required_outputs
+            },
+            "will_modify_device": False,
+        }
+        print("DRY_RUN " + json.dumps(report, sort_keys=True))
+
+    def create_backup_bundle(self, destination: pathlib.Path) -> pathlib.Path:
+        if destination.suffixes[-2:] != [".tar", ".gz"]:
+            destination.mkdir(parents=True, exist_ok=True)
+            destination = destination / (
+                "portal-backup-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S") + ".tar.gz"
+            )
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="portal-backup-") as temporary:
+            root = pathlib.Path(temporary) / "portal-backup"
+            root.mkdir()
+            status = self.collect_status()
+            (root / "status.json").write_text(
+                json.dumps(status, indent=2, sort_keys=True) + "\n"
+            )
+            commands = {
+                "getprop.txt": ["shell", "getprop"],
+                "packages.txt": ["shell", "dumpsys", "package", "packages"],
+                "device-policy.txt": ["shell", "dumpsys", "device_policy"],
+                "accounts.txt": ["shell", "dumpsys", "account"],
+                "ota.txt": ["shell", "dumpsys", "facebook.aloha.otaservice"],
+                "webview.txt": ["shell", "dumpsys", "webviewupdate"],
+            }
+            for filename, arguments in commands.items():
+                result = self.adb_run(arguments, timeout=30)
+                (root / filename).write_text(result.stdout, errors="replace")
+            device_files = root / "device-files"
+            device_files.mkdir()
+            for remote in (
+                STATE_REMOTE,
+                DEBLOAT_BACKUP_REMOTE,
+                META_ACCOUNT_BACKUP_REMOTE,
+                PRIVACY_BACKUP_REMOTE,
+                "/data/local/tmp/portal-ota-backup",
+                "/data/local/tmp/portal-presence-backup",
+                "/data/local/tmp/portal-device-owner-backup",
+                "/data/local/tmp/portal-audio-backup",
+                "/data/local/tmp/portal-audio-snapshot",
+            ):
+                self.adb_run(
+                    ["pull", remote, str(device_files)], timeout=30
+                )
+            manifest = {
+                "schema": 1,
+                "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "serial": self.serial,
+                "tool_revision": self.tool_revision(),
+                "sha256": {},
+            }
+            hashes = manifest["sha256"]
+            assert isinstance(hashes, dict)
+            for path in sorted(root.rglob("*")):
+                if path.is_file():
+                    hashes[str(path.relative_to(root))] = hashlib.sha256(
+                        path.read_bytes()
+                    ).hexdigest()
+            (root / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+            )
+            with tarfile.open(destination, "w:gz") as archive:
+                archive.add(root, arcname="portal-backup")
+        destination.chmod(0o600)
+        print(f"BACKUP_OK path={destination}")
+        return destination
+
+    def apply_privacy_dns(self) -> None:
+        if not self.privacy_dns:
+            return
+        hostname = self.privacy_dns.strip().lower()
+        if not re.fullmatch(
+            r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+            hostname,
+        ):
+            raise ProvisionError(f"invalid Private DNS hostname: {self.privacy_dns!r}")
+        existing = self.adb_run(["shell", "cat", PRIVACY_BACKUP_REMOTE], timeout=5)
+        if existing.returncode != 0:
+            backup = {
+                "schema": 1,
+                "mode": self.adb_run(
+                    ["shell", "settings", "get", "global", "private_dns_mode"],
+                    timeout=5,
+                    check=True,
+                ).stdout.strip(),
+                "hostname": self.adb_run(
+                    [
+                        "shell",
+                        "settings",
+                        "get",
+                        "global",
+                        "private_dns_specifier",
+                    ],
+                    timeout=5,
+                    check=True,
+                ).stdout.strip(),
+            }
+            with tempfile.TemporaryDirectory(prefix="portal-private-dns-") as temp:
+                local = pathlib.Path(temp) / "private-dns.json"
+                local.write_text(json.dumps(backup, indent=2) + "\n")
+                self.adb_run(
+                    ["push", str(local), PRIVACY_BACKUP_REMOTE],
+                    timeout=15,
+                    check=True,
+                )
+            self.adb_run(
+                ["shell", "chmod", "0600", PRIVACY_BACKUP_REMOTE],
+                timeout=5,
+                check=True,
+            )
+        self.adb_run(
+            ["shell", "settings", "put", "global", "private_dns_mode", "hostname"],
+            timeout=10,
+            check=True,
+        )
+        self.adb_run(
+            [
+                "shell",
+                "settings",
+                "put",
+                "global",
+                "private_dns_specifier",
+                hostname,
+            ],
+            timeout=10,
+            check=True,
+        )
+        self.privacy_dns = hostname
+        self.verify_privacy_dns()
+
+    def restore_private_dns(self) -> None:
+        result = self.adb_run(
+            ["shell", "cat", PRIVACY_BACKUP_REMOTE], timeout=5, check=True
+        )
+        try:
+            backup = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ProvisionError(f"invalid Private DNS backup: {exc}") from exc
+        if not isinstance(backup, dict) or backup.get("schema") != 1:
+            raise ProvisionError("unrecognized Private DNS backup")
+        for key, setting in (
+            ("mode", "private_dns_mode"),
+            ("hostname", "private_dns_specifier"),
+        ):
+            value = backup.get(key)
+            if not isinstance(value, str):
+                raise ProvisionError("Private DNS backup is incomplete")
+            action = "delete" if value in {"", "null"} else "put"
+            command = ["shell", "settings", action, "global", setting]
+            if action == "put":
+                command.append(value)
+            self.adb_run(command, timeout=10, check=True)
+        print("PRIVACY_DNS_RESTORE_OK")
+
+    def verify_privacy_dns(self) -> None:
+        mode = self.adb_run(
+            ["shell", "settings", "get", "global", "private_dns_mode"],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        hostname = self.adb_run(
+            ["shell", "settings", "get", "global", "private_dns_specifier"],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        expected_mode = "hostname"
+        expected_hostname = self.privacy_dns
+        if self.restore_privacy_dns:
+            result = self.adb_run(
+                ["shell", "cat", PRIVACY_BACKUP_REMOTE], timeout=5, check=True
+            )
+            try:
+                backup = json.loads(result.stdout)
+            except json.JSONDecodeError as exc:
+                raise ProvisionError(f"invalid Private DNS backup: {exc}") from exc
+            if not isinstance(backup, dict) or backup.get("schema") != 1:
+                raise ProvisionError("unrecognized Private DNS backup")
+            expected_mode = backup.get("mode")
+            expected_hostname = backup.get("hostname")
+            if not isinstance(expected_mode, str) or not isinstance(
+                expected_hostname, str
+            ):
+                raise ProvisionError("Private DNS backup is incomplete")
+            if expected_mode in {"", "null"}:
+                expected_mode = "null"
+            if expected_hostname in {"", "null"}:
+                expected_hostname = "null"
+        if mode != expected_mode or hostname != expected_hostname:
+            raise ProvisionError(
+                "Private DNS did not persist: "
+                f"mode={mode!r}/{expected_mode!r} "
+                f"hostname={hostname!r}/{expected_hostname!r}"
+            )
+        action = "restored" if self.restore_privacy_dns else "configured"
+        print(f"PRIVACY_DNS_OK action={action} mode={mode} hostname={hostname}")
+
+    def recover_actions(self) -> bool:
+        state = self.read_state()
+        self.adb_run(
+            [
+                "shell",
+                "rm",
+                "-f",
+                PRELOAD_REMOTE,
+                HELPER_REMOTE,
+                ACCOUNT_CTL_REMOTE,
+            ],
+            timeout=10,
+        )
+        if state is None:
+            print("RECOVER_NO_STATE staged_files=cleaned")
+            self.print_status()
+            return False
+        if state.get("status") != "pending":
+            print(f"RECOVER_STATE status={state.get('status')} action=status")
+            self.print_status()
+            return False
+        actions = state.get("actions")
+        if not isinstance(actions, dict):
+            raise ProvisionError("pending state has no action map")
+        allowed = set(self.requested_actions()) | {
+            "audio",
+            "restore_audio",
+            "device_owner",
+            "disable_updates",
+            "enable_updates",
+            "debloat",
+            "restore_bloat",
+            "remove_meta_accounts",
+            "optimize_presence",
+            "restore_presence_profile",
+            "privacy_dns",
+            "restore_privacy_dns",
+        }
+        for name, value in actions.items():
+            if name not in allowed:
+                raise ProvisionError(f"unsupported recovery action: {name}")
+            if name == "privacy_dns":
+                if not isinstance(value, str):
+                    raise ProvisionError("invalid privacy_dns recovery value")
+                self.privacy_dns = value
+            elif value is True:
+                setattr(self, name, True)
+            else:
+                raise ProvisionError(f"invalid recovery value for {name}: {value!r}")
+        print("RECOVER_RESUME actions=" + ",".join(sorted(actions)))
+        return True
 
     def meta_accounts(self) -> list[tuple[str, str]]:
         output = self.adb_run(
@@ -429,10 +1067,19 @@ class PortalProvisioner:
                     "GHOSTLOCK_AUDIO_PERSIST_SO": HELPER_REMOTE,
                 }
             )
+        if self.restore_audio:
+            environment.update(
+                {
+                    "GHOSTLOCK_RESTORE_AUDIO_PERSIST": "1",
+                    "GHOSTLOCK_AUDIO_RESTORE_CTL": "1",
+                }
+            )
         if self.device_owner:
             environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
         if self.disable_updates:
             environment["GHOSTLOCK_OTA_BLOCK"] = "1"
+        if self.enable_updates:
+            environment["GHOSTLOCK_RESTORE_OTA_BLOCK"] = "1"
         if self.optimize_presence:
             environment["GHOSTLOCK_PRESENCE_PROFILE"] = "1"
         if self.restore_presence_profile:
@@ -461,6 +1108,46 @@ class PortalProvisioner:
             "held reclaim payload inspection complete clean=0",
             "held child CFI complete ok=0",
         )
+        expected_markers: dict[str, tuple[str, bool]] = {}
+        if self.audio:
+            expected_markers.update(
+                {
+                    "audio_parameters": (
+                        "PORTAL_AUDIO_NATIVE_OK mode=disabled",
+                        False,
+                    ),
+                    "audio_persistence": ("audio persistence install", True),
+                }
+            )
+        if self.restore_audio:
+            expected_markers.update(
+                {
+                    "audio_defaults": (
+                        "PORTAL_AUDIO_NATIVE_OK mode=firmware-defaults",
+                        False,
+                    ),
+                    "audio_restore": ("audio persistence restore", True),
+                }
+            )
+        if self.device_owner:
+            expected_markers["device_owner"] = ("kiosk device owner install", True)
+        if self.disable_updates:
+            expected_markers["ota_block"] = ("OTA block file install", True)
+        if self.enable_updates:
+            expected_markers["ota_restore"] = ("OTA block restore", True)
+        if self.optimize_presence:
+            expected_markers["presence_profile"] = (
+                "presence profile install",
+                True,
+            )
+        if self.restore_presence_profile:
+            expected_markers["presence_restore"] = (
+                "presence profile restore",
+                True,
+            )
+        if self.remove_meta_accounts:
+            expected_markers["meta_accounts"] = ("Meta account removal", True)
+        observed_markers: set[str] = set()
         with log_path.open("w", encoding="utf-8") as output:
             process = subprocess.Popen(
                 self.adb + ["shell", shell],
@@ -484,20 +1171,18 @@ class PortalProvisioner:
                 sys.stdout.flush()
                 output.write(line)
                 output.flush()
-                if self.remove_meta_accounts:
-                    success_marker = "Meta account removal "
-                elif self.restore_presence_profile:
-                    success_marker = "presence profile restore "
-                elif self.optimize_presence:
-                    success_marker = "presence profile install "
-                elif self.disable_updates:
-                    success_marker = "OTA block install "
-                elif self.device_owner:
-                    success_marker = "kiosk device owner install "
-                elif self.audio:
-                    success_marker = "audio persistence install "
-                else:
-                    raise ProvisionError("no privileged provisioning action selected")
+                for name, (marker, require_ok) in expected_markers.items():
+                    if marker in line and (not require_ok or "ok=1" in line):
+                        observed_markers.add(name)
+                if expected_markers and observed_markers == set(expected_markers):
+                    print(
+                        "NATIVE_ACTIONS_OK actions="
+                        + ",".join(sorted(observed_markers)),
+                        flush=True,
+                    )
+                    success = True
+                    break
+                success_marker = "provision actions complete "
                 if success_marker in line and "ok=1" in line:
                     success = True
                     break
@@ -554,6 +1239,36 @@ class PortalProvisioner:
             + last_log[-4000:]
         )
 
+    def verify_audio_restored(self, wait_seconds: int = 20) -> None:
+        marker = "/data/local/tmp/portal-audio-backup/restored-v1"
+        if self.adb_run(["shell", "test", "-f", marker], timeout=5).returncode != 0:
+            raise ProvisionError("audio restore marker is absent")
+        deadline = time.monotonic() + wait_seconds
+        logs = ""
+        pid = ""
+        while time.monotonic() < deadline:
+            pid = self.adb_run(
+                ["shell", "pidof", "com.facebook.portal.aiservice"], timeout=5
+            ).stdout.strip()
+            logs = self.adb_run(
+                ["shell", "logcat", "-d", "-s", "PortalAudioPersist:*"],
+                timeout=10,
+            ).stdout
+            if pid:
+                time.sleep(3)
+                break
+            time.sleep(2)
+        logs = self.adb_run(
+            ["shell", "logcat", "-d", "-s", "PortalAudioPersist:*"], timeout=10
+        ).stdout
+        if not pid or "persistent audio watchdog started" in logs:
+            raise ProvisionError(
+                "audio persistence restore did not verify: "
+                f"aiservice_pid={pid!r} watchdog_started="
+                f"{int('persistent audio watchdog started' in logs)}"
+            )
+        print(f"AUDIO_RESTORE_OK aiservice_pid={pid} watchdog=absent")
+
     def verify_device_owner(self) -> None:
         component = KIOSK_COMPONENT
         policy = self.adb_run(
@@ -607,6 +1322,41 @@ class PortalProvisioner:
                     raise ProvisionError(
                         f"failed to disable OTA package {package}: {result.stdout}"
                     )
+
+    def enable_ota_packages(self) -> None:
+        for package in (
+            "com.facebook.aloha.otaui",
+            "com.facebook.aloha.alohaotasetup",
+        ):
+            result = self.adb_run(
+                ["shell", "pm", "enable", "--user", "0", package], timeout=10
+            )
+            if result.returncode != 0:
+                raise ProvisionError(
+                    f"failed to enable OTA package {package}: {result.stdout}"
+                )
+        self.settle_package_state()
+
+    def verify_ota_restored(self) -> None:
+        marker = "/data/local/tmp/portal-ota-backup/restored-v1"
+        if self.adb_run(["shell", "test", "-f", marker], timeout=5).returncode != 0:
+            raise ProvisionError("OTA restore marker is absent")
+        disabled = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"], timeout=10, check=True
+        ).stdout
+        still_disabled = [
+            package
+            for package in (
+                "com.facebook.aloha.otaui",
+                "com.facebook.aloha.alohaotasetup",
+            )
+            if f"package:{package}" in disabled
+        ]
+        if still_disabled:
+            raise ProvisionError(
+                "OTA packages remain disabled: " + ", ".join(still_disabled)
+            )
+        print("OTA_RESTORE_OK packages=enabled override=restored")
 
     def verify_ota_block(self, wait_seconds: int = 30) -> None:
         disabled = self.adb_run(
@@ -1031,11 +1781,15 @@ class PortalProvisioner:
     def verify_requested_state(self) -> None:
         if self.audio:
             self.verify_watchdog()
+        if self.restore_audio:
+            self.verify_audio_restored()
         if self.device_owner:
             self.verify_device_owner()
         if self.disable_updates:
             self.disable_ota_packages()
             self.verify_ota_block()
+        if self.enable_updates:
+            self.verify_ota_restored()
         if self.debloat:
             self.verify_debloat()
         if self.restore_bloat:
@@ -1046,6 +1800,8 @@ class PortalProvisioner:
             self.verify_presence_runtime(require_profile=True)
         if self.restore_presence_profile:
             self.verify_presence_runtime(require_profile=False)
+        if self.privacy_dns or self.restore_privacy_dns:
+            self.verify_privacy_dns()
 
     def verify_across_two_reboots(self, first_boot: str | None = None) -> None:
         if first_boot is None:
@@ -1058,6 +1814,7 @@ class PortalProvisioner:
                 f"unexpected boot changed before verification: {first_boot} -> {before}"
             )
         self.verify_requested_state()
+        self.write_state("complete", first_boot, second_boot)
         print(
             f"PROVISION_OK first_boot={first_boot} second_boot={second_boot} "
             f"logs={self.log_dir}"
@@ -1065,7 +1822,28 @@ class PortalProvisioner:
 
     def provision(self) -> None:
         self.connect(wait_seconds=30)
+        if self.status_only:
+            self.verify_target(require_supported=False)
+            self.print_status()
+            if self.backup_path:
+                self.create_backup_bundle(self.backup_path)
+            return
+        if self.recover:
+            self.verify_target(require_supported=False)
+            if not self.recover_actions():
+                return
+            self.recover = False
+        if self.dry_run:
+            self.verify_target(require_supported=False)
+            status = self.print_status()
+            self.dry_run_report(status)
+            if self.backup_path:
+                self.create_backup_bundle(self.backup_path)
+            return
         self.verify_target()
+        if self.backup_path:
+            self.create_backup_bundle(self.backup_path)
+        self.write_state("pending")
         already_owner = self.device_owner_preflight() if self.device_owner else False
         already_meta_clean = (
             self.meta_accounts_preflight() if self.remove_meta_accounts else False
@@ -1076,10 +1854,16 @@ class PortalProvisioner:
             self.restore_debloat()
         if self.disable_updates:
             self.disable_ota_packages()
+        if self.privacy_dns:
+            self.apply_privacy_dns()
+        if self.restore_privacy_dns:
+            self.restore_private_dns()
 
         privileged_action = (
             self.audio
+            or self.restore_audio
             or self.disable_updates
+            or self.enable_updates
             or self.optimize_presence
             or self.restore_presence_profile
             or (self.device_owner and not already_owner)
@@ -1091,6 +1875,7 @@ class PortalProvisioner:
 
         if not self.skip_build:
             build(
+                target=self.target,
                 build_audio=self.audio,
                 build_account=self.remove_meta_accounts,
             )
@@ -1124,13 +1909,21 @@ class PortalProvisioner:
             if not exploit_ok:
                 clean_boot_id = post_attempt_boot
                 continue
+            if self.enable_updates:
+                self.enable_ota_packages()
             self.verify_across_two_reboots(first_boot=post_attempt_boot)
             return
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
 
-def build(build_audio: bool, build_account: bool) -> None:
-    commands = [["make", "-C", str(ROOT / "exploit"), "-j2", "all"]]
+def build(
+    target: PortalTarget | None, build_audio: bool, build_account: bool
+) -> None:
+    if target is None:
+        raise ProvisionError("target must be selected before building")
+    commands = [
+        ["make", "-C", str(ROOT / "exploit"), "-j2", target.make_target]
+    ]
     if build_audio:
         commands.append(["make", "-C", str(ROOT / "helper"), "native"])
     if build_account:
@@ -1144,20 +1937,30 @@ def build(build_audio: bool, build_account: bool) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Provision selected Portal Go audio, Device Owner, OTA, debloat, "
-            "Meta-account, and presence-processing controls, then verify them "
-            "across two reboots."
+            "Inspect, back up, provision, recover, and verify supported Meta "
+            "Portal devices."
         )
     )
     parser.add_argument("--serial", default="192.168.1.72:5555")
     parser.add_argument("--attempts", type=int, default=12)
     parser.add_argument(
+        "--profile",
+        choices=("kiosk",),
+        help="select the complete, tested Kiosk Satellite provisioning profile",
+    )
+    audio_group = parser.add_mutually_exclusive_group()
+    audio_group.add_argument(
         "--audio",
         action="store_true",
         help=(
             "install the persistent hardware AEC/NS watchdog; this remains "
             "the default action when no provisioning action is specified"
         ),
+    )
+    audio_group.add_argument(
+        "--restore-audio",
+        action="store_true",
+        help="restore AIService's original native loader and remove the audio watchdog",
     )
     parser.add_argument(
         "--device-owner",
@@ -1170,13 +1973,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-build", action="store_true", help="use existing build outputs"
     )
-    parser.add_argument(
+    update_group = parser.add_mutually_exclusive_group()
+    update_group.add_argument(
         "--disable-updates",
         action="store_true",
         help=(
             "disable Meta's OTA UI/test packages and install a persistent "
             "MobileConfig override for the native OTA daemon"
         ),
+    )
+    update_group.add_argument(
+        "--enable-updates",
+        action="store_true",
+        help="restore the original MobileConfig override and re-enable OTA packages",
     )
     debloat_group = parser.add_mutually_exclusive_group()
     debloat_group.add_argument(
@@ -1210,6 +2019,42 @@ def parse_args() -> argparse.Namespace:
             "pose pipeline to remain live"
         ),
     )
+    privacy_group = parser.add_mutually_exclusive_group()
+    privacy_group.add_argument(
+        "--privacy-dns",
+        metavar="HOSTNAME",
+        help=(
+            "persistently use the specified DNS-over-TLS filtering resolver; "
+            "the resolver controls the actual domain block list"
+        ),
+    )
+    privacy_group.add_argument(
+        "--restore-privacy-dns",
+        action="store_true",
+        help="restore the Private DNS settings saved by --privacy-dns",
+    )
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        "--status",
+        action="store_true",
+        help="print a read-only JSON health report without exploiting or rebooting",
+    )
+    mode_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="inspect the device and print the requested plan without changing it",
+    )
+    mode_group.add_argument(
+        "--recover",
+        action="store_true",
+        help="clean stale staging and resume actions from a pending state manifest",
+    )
+    parser.add_argument(
+        "--backup",
+        type=pathlib.Path,
+        metavar="PATH",
+        help="create a timestamped diagnostic and configuration backup archive",
+    )
     presence_group.add_argument(
         "--restore-presence-profile",
         action="store_true",
@@ -1226,18 +2071,56 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not 1 <= args.attempts <= 100:
         parser.error("--attempts must be between 1 and 100")
-    if not any(
+    if args.profile == "kiosk":
+        conflicting = [
+            flag
+            for enabled, flag in (
+                (args.restore_audio, "--restore-audio"),
+                (args.enable_updates, "--enable-updates"),
+                (args.restore_bloat, "--restore-bloat"),
+                (args.restore_presence_profile, "--restore-presence-profile"),
+            )
+            if enabled
+        ]
+        if conflicting:
+            parser.error(
+                "--profile kiosk cannot be combined with rollback actions: "
+                + ", ".join(conflicting)
+            )
+        args.audio = True
+        args.device_owner = True
+        args.disable_updates = True
+        args.debloat = True
+        args.remove_meta_accounts = True
+        args.optimize_presence = True
+    selected = any(
         (
             args.audio,
+            args.restore_audio,
             args.device_owner,
             args.disable_updates,
+            args.enable_updates,
             args.debloat,
             args.restore_bloat,
             args.remove_meta_accounts,
             args.optimize_presence,
             args.restore_presence_profile,
+            args.privacy_dns,
+            args.restore_privacy_dns,
         )
-    ):
+    )
+    if args.recover and (selected or args.profile):
+        parser.error("--recover resumes its saved action set and cannot take action flags")
+    if args.recover and args.backup:
+        parser.error("--recover cannot be combined with --backup")
+    if args.status and selected:
+        parser.error("--status cannot be combined with provisioning actions")
+    args.backup_only = (
+        args.backup is not None
+        and not selected
+        and not any((args.status, args.dry_run, args.recover))
+    )
+    if not selected and not any((args.status, args.dry_run, args.recover, args.backup)):
         args.audio = True
     return args
 
@@ -1253,13 +2136,21 @@ def main() -> int:
             args.attempts,
             log_dir,
             audio=args.audio,
+            restore_audio=args.restore_audio,
             device_owner=args.device_owner,
             disable_updates=args.disable_updates,
+            enable_updates=args.enable_updates,
             debloat=args.debloat,
             restore_bloat=args.restore_bloat,
             remove_meta_accounts=args.remove_meta_accounts,
             optimize_presence=args.optimize_presence,
             restore_presence_profile=args.restore_presence_profile,
+            privacy_dns=args.privacy_dns,
+            restore_privacy_dns=args.restore_privacy_dns,
+            status_only=args.status or args.backup_only,
+            dry_run=args.dry_run,
+            backup_path=args.backup,
+            recover=args.recover,
             skip_build=args.skip_build,
         ).provision()
     except (ProvisionError, OSError, zipfile.BadZipFile) as exc:

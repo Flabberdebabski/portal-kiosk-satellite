@@ -136,13 +136,13 @@ server's current false value. Both OTA packages remained disabled. The same
 boot also verified Device Owner, wireless ADB on port 5555, and audio parameters
 3001/4001 at zero.
 
-The host tool is now `tools/provision_portal.py`. Its actions are independent:
-`--audio`, `--device-owner`, `--disable-updates`, `--debloat`,
-`--restore-bloat`, `--remove-meta-accounts`, `--optimize-presence`, and
-`--restore-presence-profile`. With no action flag, it retains the former
-audio-provisioning default. Debloat and restore use normal per-user
-PackageManager controls and do not invoke GhostLock unless combined with a
-privileged action.
+The host tool is now `tools/provision_portal.py`. Its actions are independent,
+and `--profile kiosk` selects the complete tested set. Audio and OTA changes
+have exact `--restore-audio` and `--enable-updates` rollbacks; debloat,
+presence, and Private DNS also have paired restore actions. With no action
+flag, the tool retains the former audio-provisioning default. Debloat and
+Private DNS use normal Android controls and do not invoke GhostLock unless
+combined with a privileged action.
 
 The conservative debloat set contains Meta Analytics, Messenger, WhatsApp,
 Portal Feed, Superframe, and Meta Contacts. The first application records each
@@ -214,3 +214,31 @@ This unattended contract passed clean boots
 `b9d4ba78-94ca-4ea7-bef0-90824d49db81`. Both also happened to emit a real
 presence event. The optimization and its verifier require no post-reboot user
 interaction.
+
+The provisioner now has a read-only `--status` report, mutation-free
+`--dry-run`, mode-0600 `--backup` archives with SHA-256 manifests, and
+`--recover` for a pending provisioning manifest. Every mutating operation
+records its target key, exact firmware fingerprint, action map, Git revision,
+artifact hashes, and two verification boot IDs at
+`/data/local/tmp/portal-provision-state-v1.json`. Exact-build selection is
+centralized in `tools/portal_targets.py`; an unlisted device or fingerprint
+cannot reach a build-specific kernel write.
+
+The optional `--privacy-dns HOSTNAME` action uses Android's strict
+DNS-over-TLS mode and leaves domain policy to the selected resolver. The first
+run saves both original settings, and `--restore-privacy-dns` restores them.
+Installation passed boots `ca89c119-f6e9-4ba1-ba83-47dae48a9b1b` and
+`8cc1f564-389d-4cae-b349-ab81c9cbaf26`; rollback passed
+`efd9e1d0-a5ea-465b-baab-1de5bcba40d5` and
+`65b4686d-621d-4dec-8c4c-12a0f5af25c1` with both original settings absent.
+
+The native audio and OTA rollbacks were exercised together. Audio parameters
+3001/4001 read back at firmware defaults 1/5, the original AIService loader
+matched its saved copy, the watchdog was absent, the original OTA override
+state was restored, and both OTA packages were enabled on boots
+`6731347b-a944-475b-8f46-1d9dcb14d5e5` and
+`7b4f92c5-281b-4ea5-baf1-eac6cafe9932`. Reinstallation then restored the
+desired kiosk state on boots `0e5edea7-bb6d-4193-b050-dc6717236160` and
+`e278180d-2958-4c59-a008-05e2c441f125`: audio readbacks were zero, the OTA
+gate was false from `source: OVERRIDE`, and the unattended presence verifier
+passed. SELinux was enforcing after every verification reboot.

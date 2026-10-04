@@ -1470,3 +1470,58 @@ service requires a separately verified early-boot execution hook or a way to
 modify the AVB-protected boot chain. A host-side service could rerun GhostLock
 after every reboot, but would inherit the exploit's freeze/panic risk and is
 not treated as a supported persistence mechanism.
+
+142. Added an exact target registry and moved host selection to the full
+`ro.product.device` plus `ro.build.fingerprint` pair. Read-only inspection can
+report an unknown target, while every mutating action stops before building or
+staging if the pair is absent. The initial registry contains only Portal Go
+`terry` build `5051355900018050`; future model support requires its own target
+entry and preload output.
+
+143. Added the `--profile kiosk` action set, `--status`, `--dry-run`, private
+backup archives, a persistent operation manifest, and `--recover`. The state
+manifest records selected actions, exact target and fingerprint, source
+revision, artifact SHA-256 values, state, and verification boots. Recovery
+cleans stale staged binaries and resumes only a schema-validated pending
+manifest. Kiosk Satellite APK acquisition remains a manual step and is not
+part of the profile.
+
+144. Added a resolver-backed privacy action using Android 10 strict Private
+DNS. A test with `dns.google` survived boots
+`ca89c119-f6e9-4ba1-ba83-47dae48a9b1b` and
+`8cc1f564-389d-4cae-b349-ab81c9cbaf26`. The paired restore recovered the
+original absent mode and hostname on boots
+`efd9e1d0-a5ea-465b-baab-1de5bcba40d5` and
+`65b4686d-621d-4dec-8c4c-12a0f5af25c1`. The device does not contain a safe
+durable per-domain firewall hook, so filtering policy intentionally remains at
+the selected DNS-over-TLS resolver.
+
+145. Implemented exact audio rollback using the original AIService loader
+saved by the first install. The privileged restore validates the backup as an
+ELF with the original `libdl.so` dependency, refuses an unrelated live loader,
+restores its ownership and SELinux label, removes `libpa.so`, and sets AEC/NS
+to firmware defaults 1/5. Added a paired OTA rollback that restores the exact
+MobileConfig file or its recorded absence and re-enables the two OTA packages.
+Both rollbacks passed boots `6731347b-a944-475b-8f46-1d9dcb14d5e5` and
+`7b4f92c5-281b-4ea5-baf1-eac6cafe9932`; no audio watchdog started.
+
+146. A combined rollback exposed that restarting Meta's OTA provider inside
+the temporarily privileged process could finish the file mutation and then
+stall before the final success message on the exploit's deliberately damaged
+`proc_uid` lock. The live restart is redundant because the host immediately
+reboots and verifies OTAService's newly loaded value. It is now diagnostic
+only. The host also waits for every requested action-specific `ok=1` marker,
+so a combined run cannot be accepted after only its first action.
+
+147. Reinstalled audio suppression, the OTA block, and the optimized presence
+profile. On boots `0e5edea7-bb6d-4193-b050-dc6717236160` and
+`e278180d-2958-4c59-a008-05e2c441f125`, the audio watchdog read AEC/NS as zero,
+OTAService reported `kFirmwareOtaUpdateEnable=false` from a local override,
+and the unattended presence contract passed with both frame streams, a loaded
+frame processor, populated pose metrics, and all four reduced-workload values.
+SELinux returned to enforcing and wireless ADB remained on port 5555.
+
+Current result: all requested fleet-management additions except automatic
+Kiosk Satellite APK installation are implemented. The Portal ends in its
+audio-disabled, OTA-blocked, presence-optimized kiosk state, and the new
+rollback paths have been exercised end to end.
