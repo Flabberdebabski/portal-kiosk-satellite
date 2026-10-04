@@ -197,3 +197,20 @@ emitted the presence log. Six matched process samples averaged 47.8% of one
 CPU core before the profile and 22.1% after it. The background detector had
 averaged 11.6% by itself; its worker and the liveness worker were absent with
 the profile active.
+
+Presence verification is unattended. AIService logs live analysis and
+region-of-interest frame delivery, and its shell-readable `CameraService` dump
+exposes both the loaded `AlohaFrameProcessor` and populated
+`PoseEstimatorManagerMetrics`. Static tracing shows pose results are written
+to `WorldModelManager`, whose listener emits the same `Notify people presence`
+event consumed by Kiosk Satellite when the model contains a person. The
+verifier therefore requires the camera client, CAMERA AppOp, both frame
+streams, the frame processor, pose metrics, and all four profile values after
+each reboot. It records a real presence event when one happens but does not
+require a person to be in view.
+
+This unattended contract passed clean boots
+`3fda320e-05a2-447c-88e8-a9ad3319dceb` and
+`b9d4ba78-94ca-4ea7-bef0-90824d49db81`. Both also happened to emit a real
+presence event. The optimization and its verifier require no post-reboot user
+interaction.

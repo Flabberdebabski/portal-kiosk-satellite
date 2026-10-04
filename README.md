@@ -55,9 +55,8 @@ packages to install.
 - Kiosk Satellite's device-admin receiver enabled before using
   `--device-owner`
 
-For `--optimize-presence`, keep a person in view when the Portal finishes each
-reboot. The verifier must observe the same `Notify people presence` log that
-Kiosk Satellite consumes.
+`--optimize-presence` verifies the retained camera-to-world-model pipeline
+automatically after each reboot. It does not require anyone to remain in view.
 
 ## Supported models
 
@@ -158,7 +157,7 @@ refuses to replace an existing Device Owner belonging to another application.
 ### 6. Run the provisioner
 
 For a dedicated Kiosk Satellite Portal using every currently supported
-customization, keep a person in front of the device and run:
+customization, run:
 
 ```sh
 python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
@@ -308,7 +307,7 @@ gone and the authenticators are disabled, the tool only verifies the state.
 
 ### 6. Reduce AIService CPU use while preserving presence detection
 
-Keep a person in view during the verification boots, then run:
+Run:
 
 ```sh
 python3 tools/provision_portal.py \
@@ -327,8 +326,13 @@ Smart Camera workloads:
 - face-recognition-based re-identification
 
 The provisioner requires an active AIService camera client, an allowed CAMERA
-AppOp, all four settings loaded as false, and the exact presence log on every
-verification boot. On the tested Portal Go, matched samples reduced average
+AppOp, live analysis and region-of-interest frame delivery, a loaded frame
+processor, populated pose-estimator metrics, and all four settings loaded as
+false on every verification boot. Those checks cover the same retained path
+that updates AIService's world model and emits `Notify people presence`, so the
+two-reboot verification can run unattended. An actual presence event is
+reported as additional evidence when one occurs, but it is not required for a
+successful run. On the tested Portal Go, matched samples reduced average
 AIService CPU use from 47.8% to 22.1% of one core while the presence signal
 continued to work.
 

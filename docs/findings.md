@@ -1404,3 +1404,34 @@ Current result: Kiosk Satellite's log-based, LED-free person detector remains
 live while optional AIService work is disabled. The profile is active,
 reversible, and reduced sampled AIService CPU by roughly half across the tested
 workload.
+
+136. Investigated an unattended alternative to requiring a visible person on
+each verification boot. AIService's presence-state content provider is not a
+suitable external heartbeat: it is protected by the signature/privileged
+`com.facebook.aloha.permission.ACCESS_STATESDB` permission, Kiosk Satellite
+does not request that permission, and its last-seen state is held in memory
+and resets with the provider process.
+
+137. Identified two live frame markers, `Frame available for analysis stream`
+and `Frame available for roi stream`, plus a shell-readable dump from
+AIService's `CameraService`. The dump contains the loaded
+`AlohaFrameProcessor` and populated `PoseEstimatorManagerMetrics`. Decompiled
+control flow confirms that pose-estimator results are written into
+`WorldModelManager`; the model listener is the code that emits `Notify people
+presence` when its person count is positive. Together these signals exercise
+the retained path without requiring a positive detection.
+
+138. Replaced the person-dependent heartbeat gate with the unattended pipeline
+contract. Every verification boot now requires the AIService process, active
+camera client, allowed CAMERA AppOp, analysis and ROI frame markers, loaded
+frame processor, populated pose metrics, and all four optimized settings. A
+real presence event is still reported when observed but is optional. The new
+contract passed ordinary clean boots
+`3fda320e-05a2-447c-88e8-a9ad3319dceb` and
+`b9d4ba78-94ca-4ea7-bef0-90824d49db81`; both boots also emitted the real
+Kiosk Satellite presence marker.
+
+Current result: `--optimize-presence` installation and its two-reboot
+verification are fully unattended. The optimized profile remains durable,
+and each reboot proves that the camera-to-world-model path is processing live
+frames before the provisioner accepts the result.

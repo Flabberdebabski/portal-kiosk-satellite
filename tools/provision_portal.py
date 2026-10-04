@@ -65,6 +65,12 @@ PRESENCE_PROFILE_KEYS = (
     "enable_face_rec_based_reid_v3",
 )
 PRESENCE_LOG_MARKER = "Notify people presence"
+PRESENCE_ANALYSIS_FRAME_MARKER = "Frame available for analysis stream"
+PRESENCE_ROI_FRAME_MARKER = "Frame available for roi stream"
+CAMERA_SERVICE_COMPONENT = (
+    "com.facebook.portal.aiservice/"
+    "com.facebook.alohaapp.app.services.CameraService"
+)
 
 
 class ProvisionError(RuntimeError):
@@ -884,7 +890,11 @@ class PortalProvisioner:
         pid = ""
         camera_active = False
         camera_allowed = False
-        heartbeat = False
+        presence_event = False
+        analysis_frames = False
+        roi_frames = False
+        pose_metrics = False
+        frame_processor_loaded = False
         loaded_keys: set[str] = set()
         threads = ""
         while time.monotonic() < deadline:
@@ -913,7 +923,9 @@ class PortalProvisioner:
             logs = self.adb_run(
                 ["shell", "logcat", "-d", "-v", "brief"], timeout=20
             ).stdout
-            heartbeat = PRESENCE_LOG_MARKER in logs
+            presence_event = PRESENCE_LOG_MARKER in logs
+            analysis_frames = PRESENCE_ANALYSIS_FRAME_MARKER in logs
+            roi_frames = PRESENCE_ROI_FRAME_MARKER in logs
             loaded_keys = {
                 key
                 for key in PRESENCE_PROFILE_KEYS
@@ -927,11 +939,37 @@ class PortalProvisioner:
             config_ready = not require_profile or loaded_keys == set(
                 PRESENCE_PROFILE_KEYS
             )
+            metrics = self.adb_run(
+                [
+                    "shell",
+                    "dumpsys",
+                    "activity",
+                    "service",
+                    CAMERA_SERVICE_COMPONENT,
+                ],
+                timeout=20,
+            ).stdout
+            pose_section = ""
+            frame_section = ""
+            if "[ PoseEstimatorManagerMetrics ]" in metrics:
+                pose_section = metrics.split(
+                    "[ PoseEstimatorManagerMetrics ]", 1
+                )[1].split("[ AlohaFrameProcessor ]", 1)[0]
+            if "[ AlohaFrameProcessor ]" in metrics:
+                frame_section = metrics.split(
+                    "[ AlohaFrameProcessor ]", 1
+                )[1].split("[ AiCameramanController ]", 1)[0]
+                frame_processor_loaded = bool(frame_section)
+            latency_bucket = re.compile(r"\b\d+ ms - \d+ ms:\s+\d+\b")
+            pose_metrics = bool(latency_bucket.search(pose_section))
             if (
                 pid
                 and camera_active
                 and camera_allowed
-                and heartbeat
+                and analysis_frames
+                and roi_frames
+                and pose_metrics
+                and frame_processor_loaded
                 and config_ready
             ):
                 threads = self.adb_run(
@@ -945,7 +983,10 @@ class PortalProvisioner:
                 print(
                     "PRESENCE_RUNTIME_OK "
                     f"pid={pid.split()[0]} camera=active appop=allow "
-                    "heartbeat=observed "
+                    "pipeline=active analysis_frames=observed "
+                    "roi_frames=observed pose_metrics=populated "
+                    "frame_processor=loaded "
+                    f"presence_event={'observed' if presence_event else 'not_observed'} "
                     f"profile_keys={len(loaded_keys)} "
                     f"workers_absent={','.join(disabled_workers) or 'none'}"
                 )
@@ -954,7 +995,12 @@ class PortalProvisioner:
         raise ProvisionError(
             "presence pipeline did not pass its live compatibility check: "
             f"pid={pid!r} camera_active={int(camera_active)} "
-            f"camera_allowed={int(camera_allowed)} heartbeat={int(heartbeat)} "
+            f"camera_allowed={int(camera_allowed)} "
+            f"analysis_frames={int(analysis_frames)} "
+            f"roi_frames={int(roi_frames)} "
+            f"pose_metrics={int(pose_metrics)} "
+            f"frame_processor_loaded={int(frame_processor_loaded)} "
+            f"presence_event={int(presence_event)} "
             f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
         )
 
@@ -1160,8 +1206,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "disable Smart Camera background segmentation, liveness scoring, "
-            "and re-identification while requiring AIService's person-presence "
-            "log to remain live"
+            "and re-identification while requiring AIService's analysis and "
+            "pose pipeline to remain live"
         ),
     )
     presence_group.add_argument(
