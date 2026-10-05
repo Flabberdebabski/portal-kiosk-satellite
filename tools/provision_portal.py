@@ -157,6 +157,7 @@ class PortalProvisioner:
         self.skip_build = skip_build
         self.adb = ["adb", "-s", serial]
         self.target: PortalTarget | None = None
+        self.persist_wireless_adb = False
 
     @staticmethod
     def run(
@@ -1528,6 +1529,8 @@ class PortalProvisioner:
             "GHOSTLOCK_VOLATILE_LOG": "1",
             "LD_PRELOAD": PRELOAD_REMOTE,
         }
+        if self.persist_wireless_adb:
+            environment["GHOSTLOCK_ENABLE_WIRELESS_ADB"] = "1"
         if self.audio:
             environment.update(
                 {
@@ -1582,6 +1585,11 @@ class PortalProvisioner:
             "held child CFI complete ok=0",
         )
         expected_markers: dict[str, tuple[str, bool]] = {}
+        if self.persist_wireless_adb:
+            expected_markers["wireless_adb"] = (
+                "wireless ADB persistence install",
+                True,
+            )
         if self.audio:
             expected_markers.update(
                 {
@@ -2274,6 +2282,18 @@ class PortalProvisioner:
         )
 
     def verify_requested_state(self) -> None:
+        if self.persist_wireless_adb:
+            persistent_port = self.adb_run(
+                ["shell", "getprop", "persist.adb.tcp.port"],
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+            if persistent_port != "5555":
+                raise ProvisionError(
+                    "wireless ADB did not persist on TCP port 5555: "
+                    f"persist.adb.tcp.port={persistent_port!r}"
+                )
+            print("WIRELESS_ADB_OK persistent_port=5555")
         if self.audio:
             self.verify_watchdog()
         if self.restore_audio:
@@ -2379,6 +2399,22 @@ class PortalProvisioner:
         if not privileged_action:
             self.verify_across_two_reboots()
             return
+
+        self.persist_wireless_adb = True
+        persistent_port = self.adb_run(
+            ["shell", "getprop", "persist.adb.tcp.port"],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        if persistent_port != "5555":
+            print(
+                "STOCK_ADB_REENABLE_REQUIRED persistent_port=unset\n"
+                "Keep USB connected. After every reboot until the exploit "
+                "reports WIRELESS_ADB_OK, enable ADB on the Portal and run "
+                "`adb -d tcpip 5555` from another terminal. The provisioner "
+                "waits up to 180 seconds for each reconnect.",
+                flush=True,
+            )
 
         if not self.skip_build:
             build(

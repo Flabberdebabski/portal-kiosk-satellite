@@ -19,6 +19,11 @@ All changes are persistent and survive reboots.
 - **[Temporary, scoped root provisioning](#how-the-root-exploit-works):**
   performs otherwise inaccessible system changes, then reboots normally with
   SELinux enforcing instead of leaving a general root daemon running.
+- **[Persistent wireless ADB](#4-connect-to-the-portal):** converts the
+  stock, current-boot-only wireless ADB setting to TCP port 5555 during the
+  first successful root-backed provisioning run. Later reboots reconnect
+  without repeating the USB setup, which also lets verification and the
+  device-local Shizuku launcher run unattended.
 - **[Complete kiosk profile](#6-run-the-provisioner):** applies the tested
   audio, Device Owner, update-blocking, debloat, account-removal, and presence
   settings plus third-party app updates with one command, reducing setup time
@@ -101,19 +106,23 @@ Afterward, the device reboots normally. SELinux returns to enforcing, and the
 exploit does not install `su`, a root shell, or a general root daemon. Features
 that must survive reboot use narrowly scoped configuration files, the native
 audio watchdog, or a dedicated loopback-ADB helper installed by the privileged
-process. The provisioner then checks the requested behavior on two distinct
-boots.
+process. A successful privileged run also records wireless ADB on TCP port
+5555 in Android's persistent property store. The provisioner then checks the
+requested behavior on two distinct boots.
 
 Kernel exploitation is race-sensitive. An unsuccessful attempt may reboot or
 temporarily freeze the Portal; the provisioner retries from a clean boot. The
 tool refuses to run its build-specific kernel writes if the model or firmware
-fingerprint does not match a supported target.
+fingerprint does not match a supported target. On unprovisioned stock firmware,
+ADB must be re-enabled manually after each clean or failed-attempt reboot until
+the first exploit attempt succeeds.
 
 ## Requirements
 
 ### Host computer
 
 - A Linux x86_64 host on the same network as the Portal
+- A USB data cable kept connected during the initial stock-device provisioning
 - Git, GNU Make, Python 3.9 or newer, and Android Debug Bridge (`adb`)
 - Android NDK r28.2 (`28.2.13676358`)
 - A Java Development Kit with `javac` and `jar`
@@ -128,9 +137,9 @@ packages to install.
 ### Portal
 
 - A model and exact firmware build listed under [Supported models](#supported-models)
-- Developer access with authorized wireless ADB on TCP port 5555
-- Wireless ADB configured to return after a normal reboot
-- A stable network connection and external power for several automatic reboots
+- Developer access enabled on the Portal and an authorized USB ADB connection
+- Wireless ADB enabled for the current boot with `adb -d tcpip 5555`
+- A stable IP address, network connection, and external power for several reboots
 - Kiosk Satellite installed and configured
 - Kiosk Satellite's device-admin receiver enabled before using
   `--device-owner`
@@ -229,6 +238,19 @@ make -C exploit -j2 all
 
 ### 4. Connect to the Portal
 
+Stock Portal firmware disables ADB after every reboot. First enable developer
+access and ADB on the Portal, connect it to the host with a USB data cable, and
+authorize the host if the Portal asks. Confirm the USB connection and enable
+wireless ADB for the current boot:
+
+```sh
+adb -d get-state
+adb -d tcpip 5555
+```
+
+The first command must print `device`. Keep the USB cable connected throughout
+the initial provisioning run.
+
 Set the Portal's current IP address and connect over wireless ADB:
 
 ```sh
@@ -248,18 +270,24 @@ adb -s "$PORTAL_IP:5555" shell getprop ro.build.fingerprint
 Compare both values with the supported-model table. The provisioner performs
 the same check and stops before exploitation if either value differs.
 
-Before provisioning, reboot once and confirm that wireless ADB returns without
-changing the address or authorizing the host again:
+Do not test this connection by rebooting: on an unprovisioned stock Portal it
+will disappear. The provisioner deliberately starts the exploit from a clean
+boot. When the Portal finishes that reboot, enable ADB again on its developer
+screen and run this from a second host terminal:
 
 ```sh
-adb -s "$PORTAL_IP:5555" reboot
-# Wait until the Portal finishes booting.
-adb connect "$PORTAL_IP:5555"
-adb -s "$PORTAL_IP:5555" get-state
+adb -d tcpip 5555
 ```
 
-The provisioner cannot continue through its verification reboots if ADB is
-only enabled for the current boot.
+Repeat those two steps after every failed exploit attempt that reboots the
+Portal. The provisioner keeps trying to reconnect for 180 seconds. If that
+window expires, restore USB and wireless ADB, then rerun the same provisioning
+command.
+
+The first successful privileged exploit persists wireless ADB on TCP port
+5555. The provisioner prints `WIRELESS_ADB_OK persistent_port=5555` after the
+next boot; its two verification reboots and future normal reboots can then run
+without repeating the USB procedure.
 
 ### 5. Prepare Kiosk Satellite
 
@@ -296,9 +324,11 @@ DNS-over-TLS filtering resolver, or `--shizuku` when apps on the Portal need
 Shizuku's shell-level APIs.
 
 The Portal will reboot several times. Leave it powered and do not close the
-terminal. A completed run ends with `PROVISION_OK` and two different boot IDs.
-Attempt logs are saved under a timestamped directory in `/tmp`; use
-`--log-dir PATH` to choose another location.
+terminal. For a stock Portal, also keep USB connected and follow the ADB
+re-enable procedure in step 4 until `WIRELESS_ADB_OK` appears. A completed run
+ends with `PROVISION_OK` and two different boot IDs. Attempt logs are saved
+under a timestamped directory in `/tmp`; use `--log-dir PATH` to choose another
+location.
 
 Every action is optional. Select only the flags needed for a particular
 device. The sections below explain each action, its prerequisites, and its
@@ -309,6 +339,7 @@ available rollback.
 | Action | Flag | Uses root | Automated rollback |
 | --- | --- | --- | --- |
 | Apply the complete tested kiosk profile | `--profile kiosk` | Yes | Use the individual rollback flags |
+| Persist wireless ADB across future boots | Automatic with root-backed actions | Yes | No |
 | Disable hardware audio processing | `--audio` | Yes | `--restore-audio` |
 | Make Kiosk Satellite Device Owner | `--device-owner` | Yes, on first setup | No |
 | Disable automatic firmware updates | `--disable-updates` | Yes | `--enable-updates` |
@@ -658,9 +689,10 @@ and exits without changing the configuration.
 
 The default maximum is 12 exploit attempts. Change it with `--attempts N`,
 where `N` is between 1 and 100. A failed race normally causes a clean reboot
-and another attempt. If the Portal remains unresponsive, power-cycle it, wait
-for wireless ADB to return, and rerun the same command; completed provisioning
-actions are designed to be repeatable.
+and another attempt. Before `WIRELESS_ADB_OK` has appeared, re-enable ADB on
+the Portal and run `adb -d tcpip 5555` after every reboot. If the Portal remains
+unresponsive, power-cycle it, restore USB and wireless ADB, and rerun the same
+command; completed provisioning actions are designed to be repeatable.
 
 Use `--skip-build` only when the required outputs have already been built and
 have not changed. Display every available option with:
