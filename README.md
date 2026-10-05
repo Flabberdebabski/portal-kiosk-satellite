@@ -1,5 +1,5 @@
 <h1 align="center">
-    <img alt="Meta Portal Root and Provisioning for Kiosk Satellite" src="assets/banners/banner2.svg" width="650" />
+    <img alt="Meta Portal Root and Provisioning for Kiosk Satellite" src="assets/banners/banner3.svg" width="100%" />
      <p></p>
      <p>Meta Portal Root and Provisioning for Kiosk Satellite</p>
      <p align="center">
@@ -9,8 +9,8 @@
 </h1>
 
 <p align="center">
-This project uses a root exploit to provision Meta Portal devices for the best possible
-experience with <a href="https://github.com/jxlarrea/kiosk-satellite">Kiosk Satellite</a>.
+Provision Meta Portal devices for the best possible
+experience with <a href="https://github.com/jxlarrea/kiosk-satellite">Kiosk Satellite</a> using a root exploit.
 All changes are persistent and survive reboots.
 </p>
 
