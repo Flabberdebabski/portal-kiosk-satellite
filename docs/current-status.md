@@ -183,20 +183,27 @@ the two-reboot verification.
 AIService supplies Kiosk Satellite's LED-free presence source through the
 exact `Notify people presence` log. The optional presence profile disables
 background segmentation, liveness scoring, color re-identification, and face
-re-identification while leaving tracking and pose estimation enabled. The
-installer writes AIService's private `settings_config.xml` atomically with its
-original app-data ownership and SELinux label, records the original state
-under `/data/local/tmp/portal-presence-backup`, and refuses to overwrite an
-unrelated settings file. Its restore action also refuses to replace a settings
-file changed after installation.
+re-identification while leaving tracking and pose estimation enabled. It also
+disables AIService hardware cropping so pose estimation continues to receive
+the full camera scene after the background detector stops. The installer
+writes AIService's private `settings_config.xml` atomically with its original
+app-data ownership and SELinux label, records the original state under
+`/data/local/tmp/portal-presence-backup`, and refuses to overwrite an unrelated
+settings file. Its restore action also refuses to replace a settings file
+changed after installation.
 
-Clean boots `64e187d4-1999-4152-83ba-f66d763dcf86` and
-`57488e98-61b0-45be-9128-4447503e8c1e` each loaded all four profile values as
-false, retained AIService's active camera client and allowed CAMERA AppOp, and
-emitted the presence log. Six matched process samples averaged 47.8% of one
-CPU core before the profile and 22.1% after it. The background detector had
-averaged 11.6% by itself; its worker and the liveness worker were absent with
-the profile active.
+The first four-setting profile reduced AIService from a 47.8% baseline to
+22.1% of one CPU core, but field testing found that its hardware region of
+interest could collapse the dewarped scene from 3962 to about 1896 pixels
+wide. The corrected five-setting profile adds
+`enable_hardware_cropping=false`. On clean boots
+`caeb7900-2966-4766-a562-7ae01840f445` and
+`c8d086e7-b265-40df-8ab5-57193df064bd`, AIService loaded all five values,
+retained its active camera client and allowed CAMERA AppOp, processed both
+frame streams, and exposed only the full 4032-by-3016 Android crop with no
+active Meta dewarp crop. The background and liveness workers remained absent.
+A five-minute post-boot sample used 35.5% of one CPU core, compared with the
+earlier 47.8% stock baseline and 22.1% cropped profile.
 
 Presence verification is unattended. AIService logs live analysis and
 region-of-interest frame delivery, and its shell-readable `CameraService` dump
@@ -205,7 +212,8 @@ exposes both the loaded `AlohaFrameProcessor` and populated
 to `WorldModelManager`, whose listener emits the same `Notify people presence`
 event consumed by Kiosk Satellite when the model contains a person. The
 verifier therefore requires the camera client, CAMERA AppOp, both frame
-streams, the frame processor, pose metrics, and all four profile values after
+streams, the frame processor, pose metrics, all five profile values, Meta's
+`Disabled hardware cropping` confirmation, and no active dewarp crop after
 each reboot. It records a real presence event when one happens but does not
 require a person to be in view.
 

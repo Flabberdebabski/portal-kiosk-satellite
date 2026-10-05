@@ -46,9 +46,10 @@ All changes are persistent and survive reboots.
   services used by the camera and configuration stack.
 - **[Presence-pipeline optimization](#6-reduce-aiservice-cpu-use-while-preserving-presence-detection):**
   disables optional Smart Camera segmentation, liveness, and re-identification
-  workloads while retaining the LED-free person-detection log consumed by
-  Kiosk Satellite. The tested profile cut AIService CPU use by roughly half
-  and includes an exact rollback.
+  workloads while locking the analysis pipeline to the full camera field of
+  view and retaining the LED-free person-detection log consumed by Kiosk
+  Satellite. The tested profile reduces AIService CPU use and includes an
+  exact rollback.
 - **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
   installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
   manager and starts its service with Android's ADB-shell identity after every
@@ -470,16 +471,25 @@ Smart Camera workloads:
 - color-based re-identification
 - face-recognition-based re-identification
 
+Disabling Meta's background detector by itself lets Smart Camera leave the
+pose pipeline on a narrow region of interest, which severely reduces presence
+coverage. The profile also sets `enable_hardware_cropping=false`. AIService
+then processes the uncropped camera source, preserving the Portal's full field
+of view without running the background-detector worker.
+
 The provisioner requires an active AIService camera client, an allowed CAMERA
 AppOp, live analysis and region-of-interest frame delivery, a loaded frame
-processor, populated pose-estimator metrics, and all four settings loaded as
-false on every verification boot. Those checks cover the same retained path
+processor, populated pose-estimator metrics, all five settings loaded as
+false, and hardware cropping absent from the active camera request on every
+verification boot. Those checks cover the same retained path
 that updates AIService's world model and emits `Notify people presence`, so the
 two-reboot verification can run unattended. An actual presence event is
 reported as additional evidence when one occurs, but it is not required for a
-successful run. On the tested Portal Go, matched samples reduced average
-AIService CPU use from 47.8% to 22.1% of one core while the presence signal
-continued to work.
+successful run. On the tested Portal Go, the original cropped optimization
+averaged 22.1% of one core but reduced the usable field of view. The corrected
+full-scene profile measured 35.5% in a five-minute sample, compared with 47.8%
+before optimization. Workload affects these figures, so treat them as a guide
+rather than a fixed saving.
 
 The original settings-file state is stored under
 `/data/local/tmp/portal-presence-backup`. Restore it with:

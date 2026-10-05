@@ -77,15 +77,18 @@ META_AUTHENTICATOR_COMPONENTS = (
     "com.facebook.aloha.system.alohausers.services2."
     "PrivOwnerAccountsAuthenticatorService",
 )
-PRESENCE_PROFILE_KEYS = (
-    "enable_cv_background_detector_v2",
-    "enable_liveness_metric",
-    "enable_color_based_reid",
-    "enable_face_rec_based_reid_v3",
-)
+PRESENCE_PROFILE_SETTINGS = {
+    "enable_cv_background_detector_v2": False,
+    "enable_hardware_cropping": False,
+    "enable_liveness_metric": False,
+    "enable_color_based_reid": False,
+    "enable_face_rec_based_reid_v3": False,
+}
+PRESENCE_PROFILE_KEYS = tuple(PRESENCE_PROFILE_SETTINGS)
 PRESENCE_LOG_MARKER = "Notify people presence"
 PRESENCE_ANALYSIS_FRAME_MARKER = "Frame available for analysis stream"
 PRESENCE_ROI_FRAME_MARKER = "Frame available for roi stream"
+PRESENCE_WIDE_FRAME_MARKER = "Disabled hardware cropping"
 CAMERA_SERVICE_COMPONENT = (
     "com.facebook.portal.aiservice/"
     "com.facebook.alohaapp.app.services.CameraService"
@@ -467,11 +470,13 @@ class PortalProvisioner:
             manifest = {"error": str(exc)}
         profile_keys = sorted(
             key
-            for key in PRESENCE_PROFILE_KEYS
+            for key, expected in PRESENCE_PROFILE_SETTINGS.items()
             if any(
                 "settings_config.xml" in line
                 and key in line
-                and re.search(r"\bfalse\b", line, re.IGNORECASE)
+                and re.search(
+                    rf"\b{str(expected).lower()}\b", line, re.IGNORECASE
+                )
                 for line in logs.splitlines()
             )
         )
@@ -597,6 +602,11 @@ class PortalProvisioner:
                 "installed_marker": presence_installed,
                 "restored_marker": presence_restored,
                 "profile_keys_loaded": profile_keys,
+                "full_scene_profile": (
+                    PRESENCE_WIDE_FRAME_MARKER in logs
+                    and "com.facebook.alohasdk.dewarp_crop_rect.width"
+                    not in camera.split("Tag monitoring disabled", 1)[0]
+                ),
                 "analysis_frames_observed": PRESENCE_ANALYSIS_FRAME_MARKER in logs,
                 "roi_frames_observed": PRESENCE_ROI_FRAME_MARKER in logs,
                 "presence_event_observed": PRESENCE_LOG_MARKER in logs,
@@ -2118,6 +2128,7 @@ class PortalProvisioner:
         roi_frames = False
         pose_metrics = False
         frame_processor_loaded = False
+        wide_frame = False
         loaded_keys: set[str] = set()
         threads = ""
         while time.monotonic() < deadline:
@@ -2149,13 +2160,21 @@ class PortalProvisioner:
             presence_event = PRESENCE_LOG_MARKER in logs
             analysis_frames = PRESENCE_ANALYSIS_FRAME_MARKER in logs
             roi_frames = PRESENCE_ROI_FRAME_MARKER in logs
+            active_request = camera.split("Tag monitoring disabled", 1)[0]
+            wide_frame = (
+                PRESENCE_WIDE_FRAME_MARKER in logs
+                and "com.facebook.alohasdk.dewarp_crop_rect.width"
+                not in active_request
+            )
             loaded_keys = {
                 key
-                for key in PRESENCE_PROFILE_KEYS
+                for key, expected in PRESENCE_PROFILE_SETTINGS.items()
                 if any(
                     "settings_config.xml" in line
                     and key in line
-                    and re.search(r"\bfalse\b", line, re.IGNORECASE)
+                    and re.search(
+                        rf"\b{str(expected).lower()}\b", line, re.IGNORECASE
+                    )
                     for line in logs.splitlines()
                 )
             }
@@ -2193,6 +2212,7 @@ class PortalProvisioner:
                 and roi_frames
                 and pose_metrics
                 and frame_processor_loaded
+                and (not require_profile or wide_frame)
                 and config_ready
             ):
                 threads = self.adb_run(
@@ -2209,6 +2229,7 @@ class PortalProvisioner:
                     "pipeline=active analysis_frames=observed "
                     "roi_frames=observed pose_metrics=populated "
                     "frame_processor=loaded "
+                    f"field_of_view={'full' if wide_frame else 'firmware_default'} "
                     f"presence_event={'observed' if presence_event else 'not_observed'} "
                     f"profile_keys={len(loaded_keys)} "
                     f"workers_absent={','.join(disabled_workers) or 'none'}"
@@ -2223,6 +2244,7 @@ class PortalProvisioner:
             f"roi_frames={int(roi_frames)} "
             f"pose_metrics={int(pose_metrics)} "
             f"frame_processor_loaded={int(frame_processor_loaded)} "
+            f"wide_frame={int(wide_frame)} "
             f"presence_event={int(presence_event)} "
             f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
         )
@@ -2550,8 +2572,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "disable Smart Camera background segmentation, liveness scoring, "
-            "and re-identification while requiring AIService's analysis and "
-            "pose pipeline to remain live"
+            "and re-identification, force full-frame capture, and require "
+            "AIService's analysis and pose pipeline to remain live"
         ),
     )
     privacy_group = parser.add_mutually_exclusive_group()

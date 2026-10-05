@@ -1577,3 +1577,32 @@ the kernel exploit. It passed boots
 `be358d6b-4a95-47be-aa3d-e5ce0cb01b90` and
 `63da4d22-c086-4f25-b410-18bdae844e5c`; KS reported `2026.10.7`, and
 `shizuku_server` returned as shell after the final boot.
+
+152. Field testing corrected the earlier presence-profile conclusion. With
+`enable_cv_background_detector_v2=false` and hardware cropping left at its
+default, AIService could retain a narrow Smart Camera region of interest after
+the background detector stopped. The standard Android crop still appeared as
+the full 4032-by-3016 sensor, but Meta's active dewarp metadata showed only
+about 1896 pixels of its 3962-pixel croppable width. Kiosk Satellite therefore
+lost much of the Portal's practical presence field of view even though the
+pose and world-model pipeline remained live.
+
+Decompilation located the independent `enable_hardware_cropping` setting in
+`AlohaCameraPipeline`. When false, Meta selects the uncropped source size and
+does not install the moving hardware crop. The corrected profile keeps the
+background detector, liveness scoring, and both re-identification paths off,
+and adds `enable_hardware_cropping=false`. It passed clean boots
+`caeb7900-2966-4766-a562-7ae01840f445` and
+`c8d086e7-b265-40df-8ab5-57193df064bd`: all five settings loaded, both frame
+streams and pose metrics remained active, the `BackgroundDetec` and liveness
+threads were absent, and the active camera request no longer contained Meta's
+dewarp crop. The Android crop remained the full 4032-by-3016 frame. A
+five-minute sample averaged 35.5% of one CPU core. That preserves a meaningful
+saving from the 47.8% stock baseline while retaining full-frame pose
+processing.
+
+The verifier now treats full-scene capture as part of the presence contract.
+It requires Meta's `Disabled hardware cropping` log and rejects a profile boot
+if the active request still contains `dewarp_crop_rect.width`. This prevents a
+future CPU optimization from passing while silently narrowing Kiosk
+Satellite's detection coverage.
