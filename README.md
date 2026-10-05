@@ -1,5 +1,5 @@
 <h1 align="center">
-    <img alt="Meta Portal Root and Provisioning for Kiosk Satellite" src="assets/banners/banner.svg" width="650" />
+    <img alt="Meta Portal Root and Provisioning for Kiosk Satellite" src="assets/banners/banner2.svg" width="650" />
 </h1>
 
 <p align="center">
