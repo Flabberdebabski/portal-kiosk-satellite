@@ -9,10 +9,9 @@
 </h1>
 
 <p align="center">
-This project prepares abandoned Meta Portal devices for use with <a href="https://github.com/jxlarrea/kiosk-satellite">Kiosk Satellite</a>
-through a
-guarded command-line provisioner for durable system changes that Android and
-Meta's firmware do not normally allow.
+This project uses a root exploit to provision Meta Portal devices for the best
+experience with <a href="https://github.com/jxlarrea/kiosk-satellite">Kiosk Satellite</a>.
+All changes are persistent and survive reboots.
 </p>
 
 ## What the provisioning does:
