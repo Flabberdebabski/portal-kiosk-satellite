@@ -9,7 +9,7 @@
 </h1>
 
 <p align="center">
-This project uses a root exploit to provision Meta Portal devices for the best
+This project uses a root exploit to provision Meta Portal devices for the best possible
 experience with <a href="https://github.com/jxlarrea/kiosk-satellite">Kiosk Satellite</a>.
 All changes are persistent and survive reboots.
 </p>
