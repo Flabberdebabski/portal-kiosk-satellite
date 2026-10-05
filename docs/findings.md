@@ -1599,7 +1599,9 @@ threads were absent, and the active camera request no longer contained Meta's
 dewarp crop. The Android crop remained the full 4032-by-3016 frame. A
 five-minute sample averaged 35.5% of one CPU core. That preserves a meaningful
 saving from the 47.8% stock baseline while retaining full-frame pose
-processing.
+processing. A final Kiosk Satellite edge-of-scene test confirmed that the
+usable presence field of view was restored with the background detector still
+disabled.
 
 The verifier now treats full-scene capture as part of the presence contract.
 It requires Meta's `Disabled hardware cropping` log and rejects a profile boot

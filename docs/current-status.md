@@ -204,6 +204,8 @@ frame streams, and exposed only the full 4032-by-3016 Android crop with no
 active Meta dewarp crop. The background and liveness workers remained absent.
 A five-minute post-boot sample used 35.5% of one CPU core, compared with the
 earlier 47.8% stock baseline and 22.1% cropped profile.
+Kiosk Satellite field testing after the final reboot confirmed that presence
+coverage again spans the full scene with the background detector still off.
 
 Presence verification is unattended. AIService logs live analysis and
 region-of-interest frame delivery, and its shell-readable `CameraService` dump
