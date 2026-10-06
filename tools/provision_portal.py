@@ -21,6 +21,7 @@ import time
 import urllib.request
 import zipfile
 
+from meta_debloat_components import DEBLOAT_COMPONENTS, DEBLOAT_COMPONENT_NAMES
 from portal_targets import PortalTarget, find_target
 
 
@@ -30,6 +31,12 @@ PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
 ACCOUNT_CTL_LOCAL = ROOT / "exploit/build/portal-account-ctl.jar"
 ACCOUNT_CTL_REMOTE = "/data/local/tmp/portal-account-ctl.jar"
+COMPONENT_CTL_LOCAL = ROOT / "exploit/build/portal-component-ctl.jar"
+COMPONENT_CTL_REMOTE = "/data/local/tmp/portal-component-ctl.jar"
+PRESENCE_HELPER_PACKAGE = "dev.portal.presencehelper"
+PRESENCE_HELPER_LOCAL = ROOT / "presence-helper/build/portal-presence-helper.apk"
+PRESENCE_KEY_REMOTE = "/data/local/tmp/portal-presence-adbkey.pub"
+PRESENCE_SAVED_KEY_REMOTE = "/data/local/tmp/portal-presence-adbkey-v1.pub"
 SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 SHIZUKU_HELPER_PACKAGE = "dev.portal.shizukuhelper"
 SHIZUKU_HELPER_LOCAL = ROOT / "shizuku-helper/build/portal-shizuku-helper.apk"
@@ -54,6 +61,12 @@ KIOSK_OWNER_COMPONENTS = (
     "me.jxl.kiosk_satellite.KioskAdminReceiver}",
 )
 DEBLOAT_BACKUP_REMOTE = "/data/local/tmp/portal-debloat-backup-v1.tsv"
+DEBLOAT_COMPONENT_BACKUP_REMOTE = (
+    "/data/local/tmp/portal-debloat-components-backup-v1.tsv"
+)
+DEBLOAT_COMPONENT_ACTIONS_REMOTE = (
+    "/data/local/tmp/portal-debloat-components-actions-v1.tsv"
+)
 PACKAGE_STATE_SETTLE_SECONDS = 15
 DEBLOAT_PACKAGES = (
     "com.facebook.aloha.analytics",
@@ -63,19 +76,29 @@ DEBLOAT_PACKAGES = (
     "com.facebook.alohaapps.superframe",
     "com.facebook.alohaapps.contacts",
 )
+
 META_ACCOUNT_BACKUP_REMOTE = "/data/local/tmp/portal-meta-accounts-before-v1.tsv"
 META_ACCOUNT_TYPES = (
     "com.facebook.aloha.sso",
     "com.facebook.aloha.pl",
-    "com.facebook.aloha.hw",
     "com.facebook.aloha.privowner",
 )
 META_AUTHENTICATOR_COMPONENTS = (
     "com.facebook.aloha.system.alohausers.services.AuthenticationService",
     "com.facebook.aloha.system.alohausers.services2.PLAuthenticatorService",
-    "com.facebook.aloha.system.alohausers.services2.HWAuthenticatorService",
     "com.facebook.aloha.system.alohausers.services2."
     "PrivOwnerAccountsAuthenticatorService",
+)
+META_HARDWARE_AUTHENTICATOR = (
+    "com.facebook.alohaservices.alohausers/"
+    "com.facebook.aloha.system.alohausers.services2.HWAuthenticatorService"
+)
+SELF_MANAGED_DEBLOAT_COMPONENTS = frozenset(
+    {
+        "com.facebook.aloha.system.device/"
+        "com.facebook.fbns.standalone.service.RegisteredMqttSystemBroadcastReceiver",
+        "com.facebook.alohaservices.alohausers/com.facebook.mqttlite.MqttService",
+    }
 )
 PRESENCE_PROFILE_SETTINGS = {
     "enable_cv_background_detector_v2": False,
@@ -115,6 +138,8 @@ class PortalProvisioner:
         remove_meta_accounts: bool = False,
         optimize_presence: bool = False,
         restore_presence_profile: bool = False,
+        presence_fps_cap: int | None = None,
+        restore_presence_fps: bool = False,
         privacy_dns: str | None = None,
         restore_privacy_dns: bool = False,
         allow_app_updates: bool = False,
@@ -141,6 +166,8 @@ class PortalProvisioner:
         self.remove_meta_accounts = remove_meta_accounts
         self.optimize_presence = optimize_presence
         self.restore_presence_profile = restore_presence_profile
+        self.presence_fps_cap = presence_fps_cap
+        self.restore_presence_fps = restore_presence_fps
         self.privacy_dns = privacy_dns
         self.restore_privacy_dns = restore_privacy_dns
         self.allow_app_updates = allow_app_updates
@@ -149,7 +176,8 @@ class PortalProvisioner:
         self.remove_shizuku = remove_shizuku
         self.shizuku_apk = shizuku_apk
         self.shizuku_public_key: pathlib.Path | None = None
-        self.shizuku_verifier_initially_disabled: bool | None = None
+        self.presence_public_key: pathlib.Path | None = None
+        self.package_verifier_initially_disabled: bool | None = None
         self.status_only = status_only
         self.dry_run = dry_run
         self.backup_path = backup_path
@@ -287,23 +315,43 @@ class PortalProvisioner:
             files.append((HELPER_LOCAL, HELPER_REMOTE))
         if self.remove_meta_accounts:
             files.append((ACCOUNT_CTL_LOCAL, ACCOUNT_CTL_REMOTE))
+        if (
+            self.debloat
+            or self.restore_bloat
+            or self.presence_fps_cap is not None
+            or self.restore_presence_fps
+            or self.restore_presence_profile
+        ):
+            files.append((COMPONENT_CTL_LOCAL, COMPONENT_CTL_REMOTE))
         if self.shizuku:
             if self.shizuku_public_key is None:
                 raise ProvisionError("Shizuku helper key was not prepared")
             files.append((self.shizuku_public_key, SHIZUKU_KEY_REMOTE))
+        if self.presence_fps_cap is not None:
+            if self.presence_public_key is None:
+                raise ProvisionError("presence helper key was not prepared")
+            files.append((self.presence_public_key, PRESENCE_KEY_REMOTE))
         for local, remote in files:
             if not local.is_file() or local.stat().st_size == 0:
                 raise ProvisionError(f"missing build output: {local}")
             self.adb_run(["push", str(local), remote], timeout=30, check=True)
-            mode = "0644" if remote == SHIZUKU_KEY_REMOTE else "0755"
+            mode = (
+                "0644"
+                if remote in {SHIZUKU_KEY_REMOTE, PRESENCE_KEY_REMOTE}
+                else "0755"
+            )
             self.adb_run(["shell", "chmod", mode, remote], timeout=5, check=True)
         staged = f"preload={PRELOAD_REMOTE}"
         if self.audio:
             staged += f" helper={HELPER_REMOTE}"
         if self.remove_meta_accounts:
             staged += f" account_ctl={ACCOUNT_CTL_REMOTE}"
+        if COMPONENT_CTL_REMOTE in {remote for _, remote in files}:
+            staged += f" component_ctl={COMPONENT_CTL_REMOTE}"
         if self.shizuku:
             staged += f" shizuku_key={SHIZUKU_KEY_REMOTE}"
+        if self.presence_fps_cap is not None:
+            staged += f" presence_key={PRESENCE_KEY_REMOTE}"
         print(f"STAGED {staged}")
 
     def requested_actions(self) -> dict[str, object]:
@@ -319,6 +367,7 @@ class PortalProvisioner:
             "remove_meta_accounts",
             "optimize_presence",
             "restore_presence_profile",
+            "restore_presence_fps",
             "restore_privacy_dns",
             "allow_app_updates",
             "restore_app_verifier",
@@ -329,6 +378,8 @@ class PortalProvisioner:
                 actions[name] = True
         if self.privacy_dns:
             actions["privacy_dns"] = self.privacy_dns
+        if self.presence_fps_cap is not None:
+            actions["presence_fps_cap"] = self.presence_fps_cap
         return actions
 
     def tool_revision(self) -> str:
@@ -495,6 +546,26 @@ class PortalProvisioner:
         presence_restored = exists(
             "/data/local/tmp/portal-presence-backup/restored-v1"
         )
+        presence_fps_installed = exists(
+            "/data/local/tmp/portal-presence-backup/fps-cap-v1"
+        )
+        presence_fps_restored = exists(
+            "/data/local/tmp/portal-presence-backup/fps-restored-v1"
+        )
+        presence_fps_value = shell(
+            "cat", "/data/local/tmp/portal-presence-backup/fps-cap-v1", timeout=5
+        )
+        applied_fps_match = re.search(
+            r"Setting AI Processing FPS\s+([0-9]+(?:\.[0-9]+)?)", logs
+        )
+        component_backup = self.read_component_backup(required=False)
+        component_states = (
+            self.current_component_states() if component_backup is not None else {}
+        )
+        component_disabled = sum(
+            1 for _, state in component_states.values() if state == "disabled"
+        )
+        presence_helper_dump = shell("dumpsys", "package", PRESENCE_HELPER_PACKAGE)
         shizuku_dump = shell("dumpsys", "package", SHIZUKU_PACKAGE)
         shizuku_version = re.search(r"\bversionName=([^\s]+)", shizuku_dump)
         package_verifier_setting = shell(
@@ -581,9 +652,33 @@ class PortalProvisioner:
             },
             "debloat": {
                 "disabled": sorted(set(DEBLOAT_PACKAGES) & disabled),
+                "components_disabled": component_disabled,
+                "components_targeted": len(DEBLOAT_COMPONENT_NAMES),
+                "components_retained_self_managed": sorted(
+                    SELF_MANAGED_DEBLOAT_COMPONENTS
+                ),
+                "component_backup_present": component_backup is not None,
+                "package_profile_complete": all(
+                    package not in installed or package in disabled
+                    for package in DEBLOAT_PACKAGES
+                ),
+                "component_profile_complete": component_backup is not None
+                and all(
+                    original == "absent"
+                    or component in SELF_MANAGED_DEBLOAT_COMPONENTS
+                    or component_states[component][1] == "disabled"
+                    for component, (_, original) in component_backup.items()
+                ),
                 "complete": all(
                     package not in installed or package in disabled
                     for package in DEBLOAT_PACKAGES
+                )
+                and component_backup is not None
+                and all(
+                    original == "absent"
+                    or component in SELF_MANAGED_DEBLOAT_COMPONENTS
+                    or component_states[component][1] == "disabled"
+                    for component, (_, original) in component_backup.items()
                 ),
             },
             "meta_accounts": {
@@ -602,6 +697,24 @@ class PortalProvisioner:
                 ),
                 "installed_marker": presence_installed,
                 "restored_marker": presence_restored,
+                "analysis_fps_cap_installed": presence_fps_installed,
+                "analysis_fps_cap_restored": presence_fps_restored,
+                "analysis_fps_cap": (
+                    int(presence_fps_value)
+                    if presence_fps_value.isdigit()
+                    else None
+                ),
+                "analysis_fps_applied_this_boot": (
+                    float(applied_fps_match.group(1))
+                    if applied_fps_match
+                    else None
+                ),
+                "analysis_fps_helper_installed": (
+                    f"Package [{PRESENCE_HELPER_PACKAGE}]" in presence_helper_dump
+                ),
+                "analysis_fps_helper_key_authorized": exists(
+                    PRESENCE_SAVED_KEY_REMOTE
+                ),
                 "profile_keys_loaded": profile_keys,
                 "full_scene_profile": (
                     PRESENCE_WIDE_FRAME_MARKER in logs
@@ -664,9 +777,13 @@ class PortalProvisioner:
                 self.device_owner,
                 self.disable_updates,
                 self.enable_updates,
+                self.debloat,
+                self.restore_bloat,
                 self.remove_meta_accounts,
                 self.optimize_presence,
                 self.restore_presence_profile,
+                self.presence_fps_cap is not None,
+                self.restore_presence_fps,
                 self.shizuku,
                 self.remove_shizuku,
             )
@@ -705,8 +822,18 @@ class PortalProvisioner:
             required_outputs.append(str(HELPER_LOCAL))
         if self.remove_meta_accounts:
             required_outputs.append(str(ACCOUNT_CTL_LOCAL))
+        if (
+            self.debloat
+            or self.restore_bloat
+            or self.presence_fps_cap is not None
+            or self.restore_presence_fps
+            or self.restore_presence_profile
+        ):
+            required_outputs.append(str(COMPONENT_CTL_LOCAL))
         if self.shizuku:
             required_outputs.append(str(SHIZUKU_HELPER_LOCAL))
+        if self.presence_fps_cap is not None:
+            required_outputs.append(str(PRESENCE_HELPER_LOCAL))
         report = {
             "actions": actions,
             "current": current,
@@ -754,6 +881,7 @@ class PortalProvisioner:
             for remote in (
                 STATE_REMOTE,
                 DEBLOAT_BACKUP_REMOTE,
+                DEBLOAT_COMPONENT_BACKUP_REMOTE,
                 META_ACCOUNT_BACKUP_REMOTE,
                 PRIVACY_BACKUP_REMOTE,
                 APP_VERIFIER_BACKUP_REMOTE,
@@ -1056,7 +1184,7 @@ class PortalProvisioner:
         self.install_apk_preserving_verifier(apk, "shizuku")
         self.install_apk_preserving_verifier(SHIZUKU_HELPER_LOCAL, "shizuku-helper")
         self.settle_package_state()
-        self.verify_shizuku_verifier_state()
+        self.verify_package_verifier_state()
         package_dump = self.adb_run(
             ["shell", "dumpsys", "package", SHIZUKU_PACKAGE],
             timeout=20,
@@ -1156,8 +1284,8 @@ class PortalProvisioner:
             ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
         ).stdout
         verifier_was_disabled = "package:com.facebook.appverifier" in disabled
-        if self.shizuku_verifier_initially_disabled is None:
-            self.shizuku_verifier_initially_disabled = verifier_was_disabled
+        if self.package_verifier_initially_disabled is None:
+            self.package_verifier_initially_disabled = verifier_was_disabled
         if verifier_was_disabled:
             command = f"pm install -r {shlex.quote(remote)}; rc=$?; " \
                 f"rm -f {shlex.quote(remote)}; exit $rc"
@@ -1179,21 +1307,21 @@ class PortalProvisioner:
             f"verifier_state={'disabled' if verifier_was_disabled else 'enabled'}"
         )
 
-    def verify_shizuku_verifier_state(self) -> None:
-        if self.shizuku_verifier_initially_disabled is None:
+    def verify_package_verifier_state(self) -> None:
+        if self.package_verifier_initially_disabled is None:
             return
         disabled = self.adb_run(
             ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
         ).stdout
         actual = "package:com.facebook.appverifier" in disabled
-        if actual != self.shizuku_verifier_initially_disabled:
+        if actual != self.package_verifier_initially_disabled:
             raise ProvisionError(
                 "Meta package verifier state was not restored: "
                 f"disabled={int(actual)} expected="
-                f"{int(self.shizuku_verifier_initially_disabled)}"
+                f"{int(self.package_verifier_initially_disabled)}"
             )
         print(
-            "SHIZUKU_VERIFIER_OK state="
+            "PACKAGE_VERIFIER_OK state="
             + ("disabled" if actual else "enabled")
         )
 
@@ -1208,7 +1336,7 @@ class PortalProvisioner:
         print("SHIZUKU_REMOVE_APPS_OK")
 
     def verify_shizuku(self, wait_seconds: int = 120) -> None:
-        self.verify_shizuku_verifier_state()
+        self.verify_package_verifier_state()
         package_state = self.adb_run(
             ["shell", "dumpsys", "package", SHIZUKU_HELPER_PACKAGE],
             timeout=15,
@@ -1296,7 +1424,10 @@ class PortalProvisioner:
                 PRELOAD_REMOTE,
                 HELPER_REMOTE,
                 ACCOUNT_CTL_REMOTE,
+                COMPONENT_CTL_REMOTE,
+                DEBLOAT_COMPONENT_ACTIONS_REMOTE,
                 SHIZUKU_KEY_REMOTE,
+                PRESENCE_KEY_REMOTE,
             ],
             timeout=10,
         )
@@ -1322,6 +1453,8 @@ class PortalProvisioner:
             "remove_meta_accounts",
             "optimize_presence",
             "restore_presence_profile",
+            "presence_fps_cap",
+            "restore_presence_fps",
             "privacy_dns",
             "restore_privacy_dns",
             "allow_app_updates",
@@ -1336,6 +1469,10 @@ class PortalProvisioner:
                 if not isinstance(value, str):
                     raise ProvisionError("invalid privacy_dns recovery value")
                 self.privacy_dns = value
+            elif name == "presence_fps_cap":
+                if not isinstance(value, int) or not 1 <= value <= 10:
+                    raise ProvisionError("invalid presence_fps_cap recovery value")
+                self.presence_fps_cap = value
             elif value is True:
                 setattr(self, name, True)
             else:
@@ -1372,7 +1509,12 @@ class PortalProvisioner:
     def meta_accounts_preflight(self) -> bool:
         accounts = self.meta_accounts()
         disabled = self.disabled_meta_authenticators()
-        already_clean = not accounts and set(META_AUTHENTICATOR_COMPONENTS) <= disabled
+        hardware_class = META_HARDWARE_AUTHENTICATOR.split("/", 1)[1]
+        already_clean = (
+            not accounts
+            and set(META_AUTHENTICATOR_COMPONENTS) <= disabled
+            and hardware_class not in disabled
+        )
         existing = self.adb_run(
             ["shell", "cat", META_ACCOUNT_BACKUP_REMOTE], timeout=5
         )
@@ -1472,6 +1614,142 @@ class PortalProvisioner:
                 return candidates.most_common(1)[0][0]
         raise ProvisionError("simpleperf did not expose a recognized kernel PC")
 
+    def prepare_presence_helper(self) -> None:
+        self.install_apk_preserving_verifier(
+            PRESENCE_HELPER_LOCAL, "presence-helper"
+        )
+        self.settle_package_state()
+        self.verify_package_verifier_state()
+        private_key = self.adb_run(
+            ["exec-out", "run-as", PRESENCE_HELPER_PACKAGE, "cat", "files/adbkey"],
+            timeout=10,
+        ).stdout
+        existing_public = self.adb_run(
+            [
+                "exec-out",
+                "run-as",
+                PRESENCE_HELPER_PACKAGE,
+                "cat",
+                "files/adbkey.pub",
+            ],
+            timeout=10,
+        ).stdout.strip()
+        key_exists = (
+            "-----BEGIN PRIVATE KEY-----" in private_key
+            and "-----END PRIVATE KEY-----" in private_key
+            and re.fullmatch(r"[A-Za-z0-9+/=]+ [^\r\n]+", existing_public)
+            is not None
+        )
+        if not key_exists:
+            with tempfile.TemporaryDirectory(prefix="portal-presence-key-") as temp:
+                key = pathlib.Path(temp) / "adbkey"
+                self.run(["adb", "keygen", str(key)], timeout=30, check=True)
+                for source, remote, destination in (
+                    (key, "/data/local/tmp/portal-presence-key.tmp", "files/adbkey"),
+                    (
+                        pathlib.Path(str(key) + ".pub"),
+                        "/data/local/tmp/portal-presence-key.pub.tmp",
+                        "files/adbkey.pub",
+                    ),
+                ):
+                    self.adb_run(["push", str(source), remote], timeout=15, check=True)
+                    self.adb_run(["shell", "chmod", "0644", remote], timeout=5, check=True)
+                    self.adb_run(
+                        ["shell", "run-as", PRESENCE_HELPER_PACKAGE, "mkdir", "-p", "files"],
+                        timeout=10,
+                        check=True,
+                    )
+                    self.adb_run(
+                        ["shell", "run-as", PRESENCE_HELPER_PACKAGE, "cp", remote, destination],
+                        timeout=10,
+                        check=True,
+                    )
+                    self.adb_run(
+                        ["shell", "run-as", PRESENCE_HELPER_PACKAGE, "chmod", "0600", destination],
+                        timeout=10,
+                        check=True,
+                    )
+                    self.adb_run(["shell", "rm", "-f", remote], timeout=5)
+        public = self.adb_run(
+            [
+                "exec-out",
+                "run-as",
+                PRESENCE_HELPER_PACKAGE,
+                "cat",
+                "files/adbkey.pub",
+            ],
+            timeout=10,
+            check=True,
+        ).stdout.strip()
+        if not re.fullmatch(r"[A-Za-z0-9+/=]+ [^\r\n]+", public):
+            raise ProvisionError("Portal presence helper returned an invalid ADB public key")
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.presence_public_key = self.log_dir / "portal-presence-adbkey.pub"
+        self.presence_public_key.write_text(public + "\n", encoding="ascii")
+        self.presence_public_key.chmod(0o600)
+        print(
+            f"PRESENCE_HELPER_PAYLOAD_OK package={PRESENCE_HELPER_PACKAGE} "
+            f"key_reused={int(key_exists)}"
+        )
+
+    def activate_presence_helper(self) -> None:
+        if self.presence_fps_cap is None:
+            raise ProvisionError("presence helper requires an FPS cap")
+        result = self.adb_run(
+            [
+                "shell",
+                "am",
+                "broadcast",
+                "--include-stopped-packages",
+                "-a",
+                "dev.portal.presencehelper.CONFIG",
+                "-n",
+                f"{PRESENCE_HELPER_PACKAGE}/.BootReceiver",
+                "--ei",
+                "fps",
+                str(self.presence_fps_cap),
+            ],
+            timeout=20,
+            check=True,
+        )
+        if "result=0" not in result.stdout:
+            raise ProvisionError(
+                "presence helper configuration broadcast failed: "
+                + result.stdout.strip()
+            )
+        self.adb_run(
+            [
+                "shell",
+                "am",
+                "broadcast",
+                "--include-stopped-packages",
+                "-a",
+                "dev.portal.presencehelper.START",
+                "-n",
+                f"{PRESENCE_HELPER_PACKAGE}/.BootReceiver",
+            ],
+            timeout=20,
+            check=True,
+        )
+        print(
+            f"PRESENCE_HELPER_OK package={PRESENCE_HELPER_PACKAGE} "
+            f"fps={self.presence_fps_cap}"
+        )
+
+    def uninstall_presence_helper(self) -> None:
+        installed, _ = self.package_sets()
+        if PRESENCE_HELPER_PACKAGE not in installed:
+            print("PRESENCE_HELPER_REMOVE already_absent=1")
+            return
+        result = self.adb_run(
+            ["uninstall", PRESENCE_HELPER_PACKAGE], timeout=30
+        )
+        if result.returncode != 0 or "Success" not in result.stdout:
+            raise ProvisionError(
+                "failed to remove presence helper: " + result.stdout.strip()
+            )
+        print(f"PRESENCE_HELPER_REMOVE package={PRESENCE_HELPER_PACKAGE}")
+
     def memstart(self, tag: str) -> int:
         result = self.adb_run(["shell", "bugreportz", "-p"], timeout=180)
         match = re.search(r"OK:(\S+\.zip)", result.stdout)
@@ -1556,6 +1834,37 @@ class PortalProvisioner:
             environment["GHOSTLOCK_PRESENCE_PROFILE"] = "1"
         if self.restore_presence_profile:
             environment["GHOSTLOCK_RESTORE_PRESENCE_PROFILE"] = "1"
+        if self.presence_fps_cap is not None:
+            environment["GHOSTLOCK_PRESENCE_FPS_CAP"] = str(
+                self.presence_fps_cap
+            )
+            environment["GHOSTLOCK_PRESENCE_AUTHORIZE_KEY"] = "1"
+        if self.restore_presence_fps:
+            environment["GHOSTLOCK_RESTORE_PRESENCE_FPS"] = "1"
+            environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
+        if self.restore_presence_profile:
+            environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
+        if (
+            self.debloat
+            or self.restore_bloat
+            or self.presence_fps_cap is not None
+            or self.restore_presence_fps
+            or self.restore_presence_profile
+        ):
+            environment.update(
+                {
+                    "GHOSTLOCK_COMPONENT_CTL_JAR": COMPONENT_CTL_REMOTE,
+                    "GHOSTLOCK_COMPONENT_ACTIONS": (
+                        DEBLOAT_COMPONENT_ACTIONS_REMOTE
+                    ),
+                }
+            )
+        if self.presence_fps_cap is not None:
+            environment["GHOSTLOCK_PRESENCE_PREF_ACTION"] = (
+                f"set:{self.presence_fps_cap}"
+            )
+        if self.restore_presence_fps or self.restore_presence_profile:
+            environment["GHOSTLOCK_PRESENCE_PREF_ACTION"] = "restore"
         if self.remove_meta_accounts:
             environment.update(
                 {
@@ -1624,6 +1933,35 @@ class PortalProvisioner:
         if self.restore_presence_profile:
             expected_markers["presence_restore"] = (
                 "presence profile restore",
+                True,
+            )
+        if self.presence_fps_cap is not None:
+            expected_markers["presence_fps"] = (
+                f"PORTAL_PRESENCE_FPS action=set fps={self.presence_fps_cap}",
+                True,
+            )
+            expected_markers["presence_helper_key"] = (
+                "Presence ADB key authorize",
+                True,
+            )
+        if self.restore_presence_fps:
+            expected_markers["presence_fps_restore"] = (
+                "PORTAL_PRESENCE_FPS action=restore",
+                True,
+            )
+        if self.restore_presence_profile:
+            expected_markers["presence_fps_restore"] = (
+                "PORTAL_PRESENCE_FPS action=restore",
+                True,
+            )
+        if self.restore_presence_fps or self.restore_presence_profile:
+            expected_markers["presence_helper_key_remove"] = (
+                "Presence ADB key remove",
+                True,
+            )
+        if self.debloat or self.restore_bloat:
+            expected_markers["component_profile"] = (
+                "component ctl child=",
                 True,
             )
         if self.remove_meta_accounts:
@@ -1991,8 +2329,178 @@ class PortalProvisioner:
         print(f"DEBLOAT_BACKUP_OK existing=0 path={DEBLOAT_BACKUP_REMOTE}")
         return states
 
+    @staticmethod
+    def parse_component_backup(contents: str) -> dict[str, tuple[str, str]]:
+        lines = contents.splitlines()
+        if not lines or lines[0] != "# portal-debloat-components-backup-v1":
+            raise ProvisionError("unrecognized component debloat backup format")
+        expected = {component: category for category, component in DEBLOAT_COMPONENTS}
+        states: dict[str, tuple[str, str]] = {}
+        for line in lines[1:]:
+            if not line:
+                continue
+            fields = line.split("\t")
+            if len(fields) != 3:
+                raise ProvisionError(f"invalid component backup line: {line!r}")
+            category, component, state = fields
+            if (
+                component in states
+                or component not in expected
+                or expected[component] != category
+            ):
+                raise ProvisionError(
+                    f"unexpected component in debloat backup: {component!r}"
+                )
+            if state not in {"default", "enabled", "disabled", "absent"}:
+                raise ProvisionError(
+                    f"invalid component state in debloat backup: {state!r}"
+                )
+            states[component] = (category, state)
+        missing = set(DEBLOAT_COMPONENT_NAMES) - states.keys()
+        if missing:
+            raise ProvisionError(
+                "component debloat backup is incomplete: "
+                + ", ".join(sorted(missing))
+            )
+        return states
+
+    def read_component_backup(
+        self, required: bool = True
+    ) -> dict[str, tuple[str, str]] | None:
+        result = self.adb_run(
+            ["shell", "cat", DEBLOAT_COMPONENT_BACKUP_REMOTE], timeout=10
+        )
+        if result.returncode != 0:
+            if required:
+                raise ProvisionError(
+                    "component debloat backup is absent: "
+                    + DEBLOAT_COMPONENT_BACKUP_REMOTE
+                )
+            return None
+        return self.parse_component_backup(result.stdout)
+
+    @staticmethod
+    def component_override_set(package_dump: str, label: str) -> set[str]:
+        match = re.search(
+            rf"(?m)^      {re.escape(label)}:\s*\n"
+            r"((?:        \S[^\n]*\n)*)",
+            package_dump,
+        )
+        if not match:
+            return set()
+        return {line.strip() for line in match.group(1).splitlines() if line.strip()}
+
+    def current_component_states(self) -> dict[str, tuple[str, str]]:
+        installed, _ = self.package_sets()
+        by_package: dict[str, list[tuple[str, str]]] = collections.defaultdict(list)
+        for category, component in DEBLOAT_COMPONENTS:
+            package, class_name = component.split("/", 1)
+            by_package[package].append((category, class_name))
+        states: dict[str, tuple[str, str]] = {}
+        for package, entries in by_package.items():
+            if package not in installed:
+                for category, class_name in entries:
+                    states[f"{package}/{class_name}"] = (category, "absent")
+                continue
+            dump = self.adb_run(
+                ["shell", "dumpsys", "package", package], timeout=20, check=True
+            ).stdout
+            enabled = self.component_override_set(dump, "enabledComponents")
+            disabled = self.component_override_set(dump, "disabledComponents")
+            for category, class_name in entries:
+                state = (
+                    "enabled"
+                    if class_name in enabled
+                    else "disabled"
+                    if class_name in disabled
+                    else "default"
+                )
+                states[f"{package}/{class_name}"] = (category, state)
+        return states
+
+    def ensure_component_backup(self) -> dict[str, tuple[str, str]]:
+        existing = self.read_component_backup(required=False)
+        if existing is not None:
+            print(
+                "DEBLOAT_COMPONENT_BACKUP_OK existing=1 path="
+                + DEBLOAT_COMPONENT_BACKUP_REMOTE
+            )
+            return existing
+        states = self.current_component_states()
+        contents = "# portal-debloat-components-backup-v1\n" + "".join(
+            f"{states[component][0]}\t{component}\t{states[component][1]}\n"
+            for component in DEBLOAT_COMPONENT_NAMES
+        )
+        self.push_text_atomic(contents, DEBLOAT_COMPONENT_BACKUP_REMOTE)
+        saved = self.read_component_backup(required=True)
+        if saved != states:
+            raise ProvisionError("component debloat backup verification failed")
+        print(
+            "DEBLOAT_COMPONENT_BACKUP_OK existing=0 path="
+            + DEBLOAT_COMPONENT_BACKUP_REMOTE
+        )
+        return states
+
+    def push_text_atomic(self, contents: str, remote: str) -> None:
+        remote_tmp = remote + ".tmp"
+        with tempfile.TemporaryDirectory(prefix="portal-state-") as temporary:
+            local = pathlib.Path(temporary) / "state.tsv"
+            local.write_text(contents, encoding="utf-8")
+            self.adb_run(["push", str(local), remote_tmp], timeout=20, check=True)
+        command = (
+            f"chmod 0600 {shlex.quote(remote_tmp)} && "
+            f"mv {shlex.quote(remote_tmp)} {shlex.quote(remote)}"
+        )
+        self.adb_run(["shell", command], timeout=10, check=True)
+
+    def prepare_component_actions(self, restore: bool) -> None:
+        states = self.read_component_backup(required=False)
+        if states is None:
+            if not restore:
+                states = self.ensure_component_backup()
+            else:
+                print("DEBLOAT_COMPONENT_RESTORE legacy_backup=absent actions=0")
+                self.push_text_atomic(
+                    "# portal-debloat-component-actions-v1\n",
+                    DEBLOAT_COMPONENT_ACTIONS_REMOTE,
+                )
+                return
+        actions = []
+        for component in DEBLOAT_COMPONENT_NAMES:
+            _, state = states[component]
+            if state == "absent":
+                continue
+            if not restore and component in SELF_MANAGED_DEBLOAT_COMPONENTS:
+                continue
+            action = (
+                "disable"
+                if not restore
+                else "default"
+                if state == "default"
+                else "enable"
+                if state == "enabled"
+                else "disable"
+            )
+            actions.append(f"{action}\t{component}\n")
+        if not restore:
+            account_backup = self.adb_run(
+                ["shell", "test", "-f", META_ACCOUNT_BACKUP_REMOTE], timeout=5
+            )
+            if account_backup.returncode == 0:
+                actions.append(f"enable\t{META_HARDWARE_AUTHENTICATOR}\n")
+        self.push_text_atomic(
+            "# portal-debloat-component-actions-v1\n" + "".join(actions),
+            DEBLOAT_COMPONENT_ACTIONS_REMOTE,
+        )
+        print(
+            f"DEBLOAT_COMPONENT_ACTIONS mode={'restore' if restore else 'disable'} "
+            f"count={len(actions)}"
+        )
+
     def apply_debloat(self) -> None:
         self.ensure_debloat_backup()
+        self.ensure_component_backup()
+        self.prepare_component_actions(restore=False)
         installed, _ = self.package_sets()
         for package in DEBLOAT_PACKAGES:
             if package not in installed:
@@ -2008,11 +2516,12 @@ class PortalProvisioner:
                 )
             print(f"DEBLOAT_DISABLE package={package}")
         self.settle_package_state()
-        self.verify_debloat()
+        self.verify_debloat(require_components=False)
 
     def restore_debloat(self) -> None:
         states = self.read_debloat_backup(required=True)
         assert states is not None
+        self.prepare_component_actions(restore=True)
         installed, _ = self.package_sets()
         for package in DEBLOAT_PACKAGES:
             state = states[package]
@@ -2031,7 +2540,7 @@ class PortalProvisioner:
                 )
             print(f"DEBLOAT_RESTORE package={package} state={state}")
         self.settle_package_state()
-        self.verify_debloat_restored()
+        self.verify_debloat_restored(require_components=False)
 
     def settle_package_state(self) -> None:
         # PackageManager writes package-restrictions.xml asynchronously. An
@@ -2094,7 +2603,7 @@ class PortalProvisioner:
             f"{int('(com.facebook.portal.webview,' in webview)} home={home!r}"
         )
 
-    def verify_debloat(self) -> None:
+    def verify_debloat(self, require_components: bool = True) -> None:
         installed, disabled = self.package_sets()
         missing = [
             package
@@ -2105,10 +2614,60 @@ class PortalProvisioner:
             raise ProvisionError(
                 "debloat packages became enabled: " + ", ".join(missing)
             )
+        component_count = 0
+        categories: collections.Counter[str] = collections.Counter()
+        if require_components:
+            saved = self.read_component_backup(required=True)
+            assert saved is not None
+            current = self.current_component_states()
+            component_mismatches = [
+                component
+                for component, (_, original) in saved.items()
+                if original != "absent"
+                and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
+                and current[component][1] != "disabled"
+            ]
+            if component_mismatches:
+                raise ProvisionError(
+                    "Meta cloud components became enabled: "
+                    + ", ".join(component_mismatches)
+                )
+            for component, (category, original) in saved.items():
+                if (
+                    original != "absent"
+                    and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
+                ):
+                    component_count += 1
+                    categories[category] += 1
+            running = self.adb_run(
+                ["shell", "dumpsys", "activity", "services"],
+                timeout=25,
+                check=True,
+            ).stdout
+            forbidden = (
+                "com.facebook.mqtt.service.MqttServiceV2",
+                "com.facebook.multiusermqtt.MultiuserMqttService",
+                "com.facebook.push.mqtt.service.MqttPushHelperService",
+                "com.facebook.aloha.wifidiagnostic.WifiDiagnosticService",
+                "com.facebook.alohasdk.pushnotification.PushNotificationService",
+                "com.facebook.aloha.system.services.bugreporter.PillViewService",
+            )
+            active = [name for name in forbidden if name in running]
+            if active:
+                raise ProvisionError(
+                    "disabled Meta cloud services are still running: "
+                    + ", ".join(active)
+                )
         self.verify_retained_platform()
-        print(f"DEBLOAT_OK disabled={len(set(DEBLOAT_PACKAGES) & installed)}")
+        category_summary = ",".join(
+            f"{name}:{categories[name]}" for name in sorted(categories)
+        )
+        print(
+            f"DEBLOAT_OK packages={len(set(DEBLOAT_PACKAGES) & installed)} "
+            f"components={component_count} categories={category_summary or 'pending'}"
+        )
 
-    def verify_debloat_restored(self) -> None:
+    def verify_debloat_restored(self, require_components: bool = True) -> None:
         states = self.read_debloat_backup(required=True)
         assert states is not None
         installed, disabled = self.package_sets()
@@ -2121,11 +2680,31 @@ class PortalProvisioner:
                 mismatches.append(f"{package}={actual}, expected {state}")
         if mismatches:
             raise ProvisionError("debloat restore mismatch: " + "; ".join(mismatches))
+        if require_components:
+            saved_components = self.read_component_backup(required=False)
+            if saved_components is not None:
+                current = self.current_component_states()
+                component_mismatches = [
+                    f"{component}={current[component][1]}, expected {state}"
+                    for component, (_, state) in saved_components.items()
+                    if state != "absent" and current[component][1] != state
+                ]
+                if component_mismatches:
+                    raise ProvisionError(
+                        "component debloat restore mismatch: "
+                        + "; ".join(component_mismatches)
+                    )
         self.verify_retained_platform()
-        print("DEBLOAT_RESTORE_OK")
+        print(
+            "DEBLOAT_RESTORE_OK components="
+            + ("verified" if require_components else "pending")
+        )
 
     def verify_presence_runtime(
-        self, require_profile: bool, wait_seconds: int = 90
+        self,
+        require_profile: bool,
+        expected_analysis_fps: int | None = None,
+        wait_seconds: int = 90,
     ) -> None:
         deadline = time.monotonic() + wait_seconds
         pid = ""
@@ -2138,6 +2717,11 @@ class PortalProvisioner:
         frame_processor_loaded = False
         wide_frame = False
         loaded_keys: set[str] = set()
+        analysis_fps_applied = False
+        helper_activation = False
+        helper_key_authorized = expected_analysis_fps is None or self.adb_run(
+            ["shell", "test", "-f", PRESENCE_SAVED_KEY_REMOTE], timeout=5
+        ).returncode == 0
         threads = ""
         while time.monotonic() < deadline:
             pid = self.adb_run(
@@ -2186,8 +2770,26 @@ class PortalProvisioner:
                     for line in logs.splitlines()
                 )
             }
+            analysis_fps_applied = expected_analysis_fps is not None and any(
+                "Setting AI Processing FPS" in line
+                and re.search(
+                    rf"\b{expected_analysis_fps}(?:\.0+)?\b", line
+                )
+                for line in logs.splitlines()
+            )
+            helper_activation = expected_analysis_fps is not None and any(
+                "PortalPresence" in line
+                and f"presence FPS activation complete fps={expected_analysis_fps}"
+                in line
+                for line in logs.splitlines()
+            )
             config_ready = not require_profile or loaded_keys == set(
                 PRESENCE_PROFILE_KEYS
+            )
+            fps_ready = expected_analysis_fps is None or (
+                analysis_fps_applied
+                and helper_activation
+                and helper_key_authorized
             )
             metrics = self.adb_run(
                 [
@@ -2222,6 +2824,7 @@ class PortalProvisioner:
                 and frame_processor_loaded
                 and (not require_profile or wide_frame)
                 and config_ready
+                and fps_ready
             ):
                 threads = self.adb_run(
                     ["shell", "ps", "-T", "-p", pid.split()[0]], timeout=10
@@ -2240,6 +2843,7 @@ class PortalProvisioner:
                     f"field_of_view={'full' if wide_frame else 'firmware_default'} "
                     f"presence_event={'observed' if presence_event else 'not_observed'} "
                     f"profile_keys={len(loaded_keys)} "
+                    f"analysis_fps={expected_analysis_fps or 'unlimited'} "
                     f"workers_absent={','.join(disabled_workers) or 'none'}"
                 )
                 return
@@ -2254,6 +2858,9 @@ class PortalProvisioner:
             f"frame_processor_loaded={int(frame_processor_loaded)} "
             f"wide_frame={int(wide_frame)} "
             f"presence_event={int(presence_event)} "
+            f"analysis_fps_applied={int(analysis_fps_applied)} "
+            f"helper_activation={int(helper_activation)} "
+            f"helper_key_authorized={int(helper_key_authorized)} "
             f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
         )
 
@@ -2269,6 +2876,11 @@ class PortalProvisioner:
         if missing:
             raise ProvisionError(
                 "Meta authenticators became enabled: " + ", ".join(sorted(missing))
+            )
+        hardware_class = META_HARDWARE_AUTHENTICATOR.split("/", 1)[1]
+        if hardware_class in disabled:
+            raise ProvisionError(
+                "the required hardware-identity authenticator is disabled"
             )
         package_state = self.adb_run(
             ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
@@ -2311,8 +2923,15 @@ class PortalProvisioner:
             self.verify_debloat_restored()
         if self.remove_meta_accounts:
             self.verify_meta_accounts_removed()
-        if self.optimize_presence:
-            self.verify_presence_runtime(require_profile=True)
+        if (
+            self.optimize_presence
+            or self.presence_fps_cap is not None
+            or self.restore_presence_fps
+        ):
+            self.verify_presence_runtime(
+                require_profile=True,
+                expected_analysis_fps=self.presence_fps_cap,
+            )
         if self.restore_presence_profile:
             self.verify_presence_runtime(require_profile=False)
         if self.privacy_dns or self.restore_privacy_dns:
@@ -2383,14 +3002,30 @@ class PortalProvisioner:
             self.allow_third_party_app_updates()
         if self.restore_app_verifier:
             self.restore_app_verifier_setting()
+        if (
+            (
+                self.presence_fps_cap is not None
+                or self.restore_presence_fps
+                or self.restore_presence_profile
+            )
+            and not (self.debloat or self.restore_bloat)
+        ):
+            self.push_text_atomic(
+                "# portal-debloat-component-actions-v1\n",
+                DEBLOAT_COMPONENT_ACTIONS_REMOTE,
+            )
 
         privileged_action = (
             self.audio
             or self.restore_audio
             or self.disable_updates
             or self.enable_updates
+            or self.debloat
+            or self.restore_bloat
             or self.optimize_presence
             or self.restore_presence_profile
+            or self.presence_fps_cap is not None
+            or self.restore_presence_fps
             or (self.device_owner and not already_owner)
             or (self.remove_meta_accounts and not already_meta_clean)
             or self.shizuku
@@ -2421,10 +3056,22 @@ class PortalProvisioner:
                 target=self.target,
                 build_audio=self.audio,
                 build_account=self.remove_meta_accounts,
+                build_components=(
+                    self.debloat
+                    or self.restore_bloat
+                    or self.presence_fps_cap is not None
+                    or self.restore_presence_fps
+                    or self.restore_presence_profile
+                ),
                 build_shizuku=self.shizuku,
+                build_presence=self.presence_fps_cap is not None,
             )
         if self.shizuku:
             self.install_shizuku_payload()
+        if self.presence_fps_cap is not None:
+            self.prepare_presence_helper()
+        if self.restore_presence_fps or self.restore_presence_profile:
+            self.uninstall_presence_helper()
         self.stage()
         clean_boot_id: str | None = None
         for attempt in range(1, self.attempts + 1):
@@ -2459,6 +3106,8 @@ class PortalProvisioner:
                 self.enable_ota_packages()
             if self.remove_shizuku:
                 self.uninstall_shizuku_payload()
+            if self.presence_fps_cap is not None:
+                self.activate_presence_helper()
             self.verify_across_two_reboots(first_boot=post_attempt_boot)
             return
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
@@ -2468,7 +3117,9 @@ def build(
     target: PortalTarget | None,
     build_audio: bool,
     build_account: bool,
+    build_components: bool,
     build_shizuku: bool,
+    build_presence: bool,
 ) -> None:
     if target is None:
         raise ProvisionError("target must be selected before building")
@@ -2479,8 +3130,12 @@ def build(
         commands.append(["make", "-C", str(ROOT / "helper"), "native"])
     if build_account:
         commands.append(["make", "-C", str(ROOT / "exploit"), "account-ctl"])
+    if build_components:
+        commands.append(["make", "-C", str(ROOT / "exploit"), "component-ctl"])
     if build_shizuku:
         commands.append(["make", "-C", str(ROOT / "shizuku-helper"), "all"])
+    if build_presence:
+        commands.append(["make", "-C", str(ROOT / "presence-helper"), "all"])
     for command in commands:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
@@ -2598,7 +3253,7 @@ def parse_args() -> argparse.Namespace:
         "--remove-meta-accounts",
         action="store_true",
         help=(
-            "remove the four Portal Meta accounts locally and persistently "
+            "remove the three Portal user accounts locally and persistently "
             "disable only their authenticator service components"
         ),
     )
@@ -2610,6 +3265,15 @@ def parse_args() -> argparse.Namespace:
             "disable Smart Camera background segmentation, liveness scoring, "
             "and re-identification, force full-frame capture, and require "
             "AIService's analysis and pose pipeline to remain live"
+        ),
+    )
+    parser.add_argument(
+        "--presence-fps-cap",
+        type=int,
+        metavar="FPS",
+        help=(
+            "cap only AIService's presence-analysis rate (1-10 FPS); Kiosk "
+            "Satellite RTSP capture keeps its configured frame rate"
         ),
     )
     privacy_group = parser.add_mutually_exclusive_group()
@@ -2656,6 +3320,14 @@ def parse_args() -> argparse.Namespace:
             "--optimize-presence run"
         ),
     )
+    presence_group.add_argument(
+        "--restore-presence-fps",
+        action="store_true",
+        help=(
+            "remove only the optional analysis FPS cap while keeping the "
+            "wide presence optimization"
+        ),
+    )
     parser.add_argument(
         "--log-dir",
         type=pathlib.Path,
@@ -2664,6 +3336,18 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not 1 <= args.attempts <= 100:
         parser.error("--attempts must be between 1 and 100")
+    if args.presence_fps_cap is not None and not 1 <= args.presence_fps_cap <= 10:
+        parser.error("--presence-fps-cap must be between 1 and 10")
+    if args.presence_fps_cap is not None and (
+        args.restore_presence_profile or args.restore_presence_fps
+    ):
+        parser.error(
+            "--presence-fps-cap cannot be combined with a presence rollback"
+        )
+    if args.presence_fps_cap is not None:
+        # The activation activity also applies Meta's other camera toggles.
+        # Always pair the cap with the tested full-scene presence profile.
+        args.optimize_presence = True
     if args.profile == "kiosk":
         conflicting = [
             flag
@@ -2672,6 +3356,7 @@ def parse_args() -> argparse.Namespace:
                 (args.enable_updates, "--enable-updates"),
                 (args.restore_bloat, "--restore-bloat"),
                 (args.restore_presence_profile, "--restore-presence-profile"),
+                (args.restore_presence_fps, "--restore-presence-fps"),
                 (args.restore_app_verifier, "--restore-app-verifier"),
             )
             if enabled
@@ -2700,6 +3385,8 @@ def parse_args() -> argparse.Namespace:
             args.remove_meta_accounts,
             args.optimize_presence,
             args.restore_presence_profile,
+            args.presence_fps_cap is not None,
+            args.restore_presence_fps,
             args.privacy_dns,
             args.restore_privacy_dns,
             args.allow_app_updates,
@@ -2746,6 +3433,8 @@ def main() -> int:
             remove_meta_accounts=args.remove_meta_accounts,
             optimize_presence=args.optimize_presence,
             restore_presence_profile=args.restore_presence_profile,
+            presence_fps_cap=args.presence_fps_cap,
+            restore_presence_fps=args.restore_presence_fps,
             privacy_dns=args.privacy_dns,
             restore_privacy_dns=args.restore_privacy_dns,
             allow_app_updates=args.allow_app_updates,

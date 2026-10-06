@@ -42,9 +42,10 @@ All changes are persistent and survive reboots.
   restores the original OTA configuration and packages.
 - **[Conservative Meta app debloat](#4-disable-unused-meta-applications):**
   disables six unused communication, feed, display, contact, and telemetry
-  packages to reduce background work while retaining camera, presence, media,
-  WebView, and kiosk services. Its rollback restores every package's saved
-  state.
+  packages plus 196 cloud-facing MQTT, Firebase, diagnostics, bug-reporting,
+  push, analytics, and background-worker components. This reduces wakeups and
+  background work while retaining camera, presence, media, WebView, and kiosk
+  services. Its rollback restores every saved package and component state.
 - **[Local Meta-account removal](#5-remove-local-meta-accounts):** removes
   obsolete Portal identity data and prevents its authenticators from
   recreating those accounts, improving privacy without disabling the shared
@@ -55,6 +56,11 @@ All changes are persistent and survive reboots.
   view and retaining the LED-free person-detection log consumed by Kiosk
   Satellite. The tested profile reduces AIService CPU use and includes an
   exact rollback.
+- **[Optional presence-analysis frame-rate cap](#optional-presence-analysis-frame-rate-cap):**
+  limits Meta's pose-analysis callback to a selected rate while leaving the
+  camera sensor and Kiosk Satellite's independent RTSP stream at their normal
+  configured frame rates. A device-local helper reapplies the cap after every
+  boot and then exits.
 - **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
   installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
   manager and starts its service with Android's ADB-shell identity after every
@@ -127,7 +133,8 @@ the first exploit attempt succeeds.
 - Android NDK r28.2 (`28.2.13676358`)
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
-  `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku`
+  `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku` or
+  `--presence-fps-cap`
 - Internet access to download the pinned official Shizuku APK, or a local APK
   supplied with `--shizuku-apk PATH`
 
@@ -321,7 +328,8 @@ The `kiosk` profile expands to the audio, Device Owner, update blocking,
 debloat, Meta-account removal, presence optimization, and third-party app
 update actions. You may add `--privacy-dns HOSTNAME` when you operate a
 DNS-over-TLS filtering resolver, or `--shizuku` when apps on the Portal need
-Shizuku's shell-level APIs.
+Shizuku's shell-level APIs. Add `--presence-fps-cap 2` when reduced Meta
+analysis CPU use is more important than its default analysis cadence.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. For a stock Portal, also keep USB connected and follow the ADB
@@ -343,9 +351,10 @@ available rollback.
 | Disable hardware audio processing | `--audio` | Yes | `--restore-audio` |
 | Make Kiosk Satellite Device Owner | `--device-owner` | Yes, on first setup | No |
 | Disable automatic firmware updates | `--disable-updates` | Yes | `--enable-updates` |
-| Disable unused Meta applications | `--debloat` | No | `--restore-bloat` |
+| Disable unused Meta applications and cloud workers | `--debloat` | Yes | `--restore-bloat` |
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
+| Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
 | Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
 | Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
@@ -445,14 +454,25 @@ The conservative debloat profile disables these packages for user 0:
 - Superframe
 - Meta Contacts
 
-It retains the camera, audio, identity, presence, media, app-management, and
-WebView services needed by the Portal and Kiosk Satellite. This action uses
-normal Android package controls and does not need the kernel exploit when run
-by itself.
+It also disables 196 individual components across retained Meta packages:
+cloud-facing MQTT clients, Firebase receivers and services, diagnostics,
+bug-reporting, push handlers, analytics uploaders, and scheduled background
+workers. Component-level targeting removes unused work without disabling the
+camera, audio, presence, media, app-management, identity, launcher, or WebView
+packages that the Portal and Kiosk Satellite still need.
+
+Two firmware-owned MQTT entry points are deliberately retained because each
+self-enables before use; disabling either caused a service restart loop during
+testing. The remaining MQTT components are disabled. To stop the retained
+core client from reaching `mqtt-mini.facebook.com`, block that hostname with
+your network DNS or firewall. The component list is maintained in
+`tools/meta_debloat_components.py`.
 
 Before changing package state, the provisioner saves the exact enabled,
 disabled, or absent state of every package in
-`/data/local/tmp/portal-debloat-backup-v1.tsv`. Restore those saved states with:
+`/data/local/tmp/portal-debloat-backup-v1.tsv` and every targeted component in
+`/data/local/tmp/portal-debloat-components-backup-v1.tsv`. Restore those saved
+states with:
 
 ```sh
 python3 tools/provision_portal.py \
@@ -469,12 +489,12 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --remove-meta-accounts
 ```
 
-This removes the Portal-specific proxy SSO, platform-login, hardware, and
-private-owner accounts from Android AccountManager and Meta's local identity
-databases. It then disables only their four authenticator components so the
-firmware cannot immediately recreate the accounts. The shared `alohausers`
-package stays enabled because camera support, MobileConfig, and other Portal
-services still use it.
+This removes the Portal-specific proxy SSO, platform-login, and private-owner
+accounts from Android AccountManager and Meta's local identity databases. It
+then disables their three user-account authenticator components so firmware
+cannot immediately recreate the accounts. The hardware-identity authenticator
+and shared `alohausers` package stay enabled because camera startup,
+MobileConfig, and other Portal services depend on them.
 
 The original account type and name inventory is saved at
 `/data/local/tmp/portal-meta-accounts-before-v1.tsv` and copied into the host
@@ -532,6 +552,49 @@ python3 tools/provision_portal.py \
 
 The installer and restore action use atomic file replacement, preserve the
 app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
+
+#### Optional presence-analysis frame-rate cap
+
+The full-scene profile keeps Meta's analysis pipeline busy at its firmware
+rate. To reduce that remaining load, cap only its pose-analysis callback. Two
+frames per second is the tested balance for room-presence detection:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --presence-fps-cap 2
+```
+
+Valid values are 1 through 10. This option automatically includes the tested
+full-scene presence profile. It writes Meta's own analysis-throttle settings
+and installs a small local boot helper that applies them after each reboot,
+then stops. Applying the setting briefly opens Meta's hidden AI settings
+activity and immediately returns to the configured Home app.
+
+Android blocks an ordinary background app from opening that activity, so the
+helper uses the Portal's loopback ADB listener at `127.0.0.1:5555`. The
+temporary-root stage authorizes a dedicated per-device key stored only in the
+helper's private app data. It does not depend on Shizuku, another computer, or
+network access after installation. Both presence rollback commands remove the
+helper and its authorized key.
+
+The cap is downstream of camera capture. On the tested Portal Go, the active
+camera request retained its normal `[8, 30]` target range while Meta logged a
+2 FPS analysis rate. Kiosk Satellite RTSP uses a separate Camera2 capture and
+encoder path, so it remains free to stream at its configured frame rate. A
+live 10-second test decoded 56 RTSP frames over 9.98 seconds, about 5.5 FPS from
+the configured roughly 6 FPS stream, while Meta analysis remained at 2 FPS.
+The provisioner verifies the applied analysis rate, full field of view, camera
+request, pose pipeline, and helper activation on two boots.
+
+Remove only the cap and helper while keeping the full-scene optimization:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-presence-fps
+```
+
+`--restore-presence-profile` also removes the cap and helper before restoring
+the complete original presence configuration.
 
 ### 7. Use a filtering Private DNS resolver
 

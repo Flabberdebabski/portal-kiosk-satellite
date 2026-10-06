@@ -11,13 +11,12 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-/** Local AccountManager cleanup for the four Portal-specific Meta account types. */
+/** Local AccountManager cleanup for Portal user-account types. */
 public final class PortalAccountCtl {
     private static final Set<String> META_ACCOUNT_TYPES = new HashSet<>(
             Arrays.asList(
                     "com.facebook.aloha.sso",
                     "com.facebook.aloha.pl",
-                    "com.facebook.aloha.hw",
                     "com.facebook.aloha.privowner"));
 
     private static String callerPackage() {

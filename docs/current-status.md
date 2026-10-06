@@ -140,9 +140,10 @@ The host tool is now `tools/provision_portal.py`. Its actions are independent,
 and `--profile kiosk` selects the complete tested set. Audio and OTA changes
 have exact `--restore-audio` and `--enable-updates` rollbacks; debloat,
 presence, and Private DNS also have paired restore actions. With no action
-flag, the tool retains the former audio-provisioning default. Debloat and
-Private DNS use normal Android controls and do not invoke GhostLock unless
-combined with a privileged action.
+flag, the tool retains the former audio-provisioning default. Private DNS uses
+normal Android controls. Debloat now invokes GhostLock because retained Meta
+packages require privileged component-level changes in addition to the six
+ordinary package-state changes.
 
 The conservative debloat set contains Meta Analytics, Messenger, WhatsApp,
 Portal Feed, Superframe, and Meta Contacts. The first application records each
@@ -161,21 +162,22 @@ and the audio watchdog remained healthy. The final watchdog startup again read
 AEC 3001 and NS mode 4001 as zero and corrected Meta's later NS rewrite from 5
 to 0.
 
-The Portal-specific Meta accounts are now removed. Static and live inspection
-identified four account types provided by four authenticator services in
-`com.facebook.alohaservices.alohausers`: proxy SSO, platform login, hardware,
-and private owner. Meta's official owner-removal flow requires a valid server
-user context, while its public `CLEAR_ACCOUNT` receiver only clears proxy SSO.
-The privileged local path therefore removes the Android AccountManager
-records, clears the identity rows in `aloha_users_db` and
-`aloha_users_database`, and disables only those four authenticator components.
+The Portal-specific Meta user accounts are now removed. Static and live
+inspection identified three user account types in
+`com.facebook.alohaservices.alohausers`: proxy SSO, platform login, and private
+owner. Meta's official owner-removal flow requires a valid server user
+context, while its public `CLEAR_ACCOUNT` receiver only clears proxy SSO. The
+privileged local path therefore removes the Android AccountManager records,
+clears the identity rows in `aloha_users_db` and `aloha_users_database`, and
+disables those three authenticator components. The separate hardware-identity
+authenticator stays enabled because disabling it caused platform instability.
 
 The original type/name inventory is retained at
 `/data/local/tmp/portal-meta-accounts-before-v1.tsv`. The shared `alohausers`
 package remains enabled for MobileConfig and other platform services. Clean
 boots `8db565c4-f7c2-40dc-9df5-aba6b4a98390` and
 `8762d7c6-1db1-400f-9559-8df8dc9f5f33` each reported zero target accounts and
-all four authenticators disabled. Both cameras, AI Service, Kiosk Satellite
+all three user authenticators disabled. Both cameras, AI Service, Kiosk Satellite
 Home, and Portal WebView remained available; SELinux was enforcing. Repeated
 `--remove-meta-accounts` runs recognize the completed state and perform only
 the two-reboot verification.
@@ -304,3 +306,65 @@ SELinux enforcing. The final rebuilt helper artifact repeated that result on
 boot `411d1d93-4625-476d-bf88-4e1d76581595`. Repeat installation read and
 reused the same private/public key pair. `--remove-shizuku` removes the
 authorized helper key, both packages, and any running server.
+
+## Targeted Meta component debloat and optional analysis cap
+
+The debloat profile now preserves its six package-level removals and also
+controls 198 individual components inside retained Meta packages. The tested
+safe state disables 196 components: 143 scheduled/background workers, 16
+bug-reporting components, 15 diagnostics components, 12 Firebase components,
+eight MQTT components, and two push components. PackageManager state is saved
+before mutation and restored exactly by `--restore-bloat`.
+
+Two components are recorded but deliberately exempted:
+`com.facebook.alohaservices.alohausers/com.facebook.mqttlite.MqttService` and
+`com.facebook.aloha.system.device/com.facebook.fbns.standalone.service.RegisteredMqttSystemBroadcastReceiver`.
+Both enable themselves immediately before a bind or start. Forcing either off
+caused a repeat service failure/restart cycle, so component state is not a safe
+way to suppress the final firmware-owned MQTT connection. Network DNS or
+firewall policy remains the safe control for `mqtt-mini.facebook.com`.
+
+Meta's arbitrary analysis throttle is backed by
+`/settings/aloha/enable_analysis_throttle` and
+`/settings/aloha/analysis_throttle_fps` in AIService's preferences database.
+Persisting the values is insufficient: `AlohaFrameProcessor` only receives the
+rate when Meta's hidden debug activity pauses. The optional
+`--presence-fps-cap FPS` action therefore stores the values with temporary
+root and installs `dev.portal.presencehelper`, which briefly launches and
+pauses that activity once after boot, then exits. Before activation,
+the privileged helper also pins the five tested full-scene profile preferences
+to false so the debug activity cannot re-enable hardware cropping.
+
+Android 10 rejected the helper's direct background activity launch. The final
+helper instead authenticates to the already-persistent ADB daemon only at
+`127.0.0.1:5555` with its own per-device key, runs the two `am start` commands
+as shell, and exits. Temporary root appends that public key without replacing
+the user's ADB keys. Presence rollback removes both the package and its saved
+authorized key; no Shizuku installation or external host is required at boot.
+
+The live 2 FPS experiment logged `Setting AI Processing FPS 2.000000` and
+reduced steady AIService CPU samples from roughly 30-37% of one core to mostly
+6-19%, with transient spikes. Camera service metadata continued to advertise
+the normal `[8, 30]` target range; the throttle is applied to Meta's downstream
+analysis callback rather than the camera sensor. Kiosk Satellite's RTSP path
+uses its own Camera2 request and encoder, so the analysis cap does not impose a
+2 FPS limit on RTSP output. Final acceptance requires two reboot passes with
+the helper activation, selected analysis rate, full-scene request, both Meta
+frame streams, and populated pose metrics all present.
+
+The combined profile passed clean boots
+`05bb2ca3-7517-4256-9981-2351b20e2456` and
+`bcba4923-4c5f-4dc4-bf91-f2465a6967ce`. Both held all 196 component disables,
+loaded all five full-scene values, reported `Setting AI Processing FPS
+2.000000`, kept analysis and ROI frames plus populated pose metrics, and had no
+active Meta dewarp crop. The helper service was absent after activation,
+confirming that it exits instead of polling. Camera metadata on the final boot
+still requested `[8, 30]` FPS with a 41.8 ms observed frame duration.
+Kiosk Satellite's live RTSP endpoint returned H.264 at 640 by 480; a ten-second
+probe decoded 56 frames across 9.98 seconds, or 5.5 FPS, while Meta analysis
+remained capped at 2 FPS.
+
+A third ordinary reboot to `41aa8497-07d8-483a-90e5-e2c52012abb0` repeated
+the 2 FPS activation and full-scene/component checks. The presence helper had
+exited, SELinux was enforcing, Shizuku was running as shell, and
+`com.facebook.appverifier` remained enabled after the helper installation.

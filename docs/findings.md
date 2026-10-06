@@ -1608,3 +1608,82 @@ It requires Meta's `Disabled hardware cropping` log and rejects a profile boot
 if the active request still contains `dewarp_crop_rect.width`. This prevents a
 future CPU optimization from passing while silently narrowing Kiosk
 Satellite's detection coverage.
+
+153. Enumerated enabled receivers, services, providers, and worker entry points
+inside retained Meta packages, then classified the cloud-facing and periodic
+work without disabling whole platform packages. The resulting manifest has 198
+components: 143 background workers, 16 bug-reporting components, 15 diagnostic
+components, 12 Firebase components, 10 MQTT components, and two push
+components. `PortalComponentCtl` applies the saved component states through
+`IPackageManager` from the temporary root process, and `--restore-bloat`
+restores every original default/enabled/disabled state from
+`/data/local/tmp/portal-debloat-components-backup-v1.tsv`.
+
+Live testing found two unsafe exceptions. Meta's
+`com.facebook.mqttlite.MqttService` and the device package's
+`RegisteredMqttSystemBroadcastReceiver` both issue an enable operation on their
+own component immediately before use. Disabling either produced a failure and
+restart loop. The final profile exempts those two, disables the other 196
+components, and verifies that representative MQTT, push, diagnostic, and bug
+report services are absent while AIService, both cameras, Kiosk Home, and
+Portal WebView remain available. The retained core MQTT client still attempts
+`mqtt-mini.facebook.com`; DNS or firewall filtering is required to block that
+last endpoint safely.
+
+154. Traced Meta's optional presence frame-rate controls. The persistent keys
+are `/settings/aloha/enable_analysis_throttle` and
+`/settings/aloha/analysis_throttle_fps` in AIService's `prefs_db`, encoded as a
+boolean and double. Merely writing them does not change the live pipeline:
+`ResourceProfileManager` starts in its performance profile. Meta's exported
+hidden `AlohaDebugSettingsFragment.onPause` is the path that calls
+`AlohaFrameProcessor` with the arbitrary rate. Launching the activity and
+returning Home produced `Setting AI Processing FPS 2.000000`.
+
+That activity also reapplies every Smart Camera checkbox and can re-enable
+hardware cropping. The privileged preference stage therefore backs up and
+writes the five full-scene profile switches as false before activation. A new
+normal application, `dev.portal.presencehelper`, starts after boot, waits for
+AIService startup, invokes the hidden activity once, returns to Home, and then
+exits. This survives reboot without a host and adds no permanent polling
+workload.
+
+A direct `startActivity` attempt was denied by Android 10's background-launch
+policy even with target SDK 25. The completed helper uses the same minimal
+classic ADB protocol design as the Shizuku launcher, but with an independent
+per-device key. Temporary root appends its public key to `adb_keys`; the app
+connects only to `127.0.0.1:5555`, runs the debug-activity and Home commands as
+shell, closes the socket, and exits. The restore path removes the exact key.
+
+At 2 FPS, observed steady AIService CPU fell from roughly 30-37% of one core to
+mostly 6-19%, with startup/transient spikes. The active camera request retained
+its `[8, 30]` AE target range, showing that the setting limits Meta's analysis
+callback rather than sensor capture. Kiosk Satellite's RTSP implementation
+owns a separate Camera2 capture and encoder path, so its configured output rate
+is not replaced with the presence-analysis rate. The provisioner requires the
+selected `Setting AI Processing FPS` log, the helper's completion log, full
+field of view, both AI frame streams, frame processor, and populated pose
+metrics across two normal boots.
+
+The finished implementation passed boots
+`05bb2ca3-7517-4256-9981-2351b20e2456` and
+`bcba4923-4c5f-4dc4-bf91-f2465a6967ce`. Each boot applied 2 FPS through the
+loopback helper, retained the full-scene request and live pose pipeline, and
+kept the 196-component debloat profile. The helper stopped after activation.
+The final camera request contained `[8, 30]`, a 41,771,488 ns frame duration,
+and no `com.facebook.alohasdk.dewarp_crop_rect.width` tag.
+The active Kiosk Satellite RTSP server simultaneously delivered 640-by-480
+H.264. A ten-second client probe decoded 56 frames over 9.98 seconds (5.5 FPS),
+direct evidence that the 2 FPS Meta analysis cap does not limit RTSP output.
+An additional ordinary reboot to
+`41aa8497-07d8-483a-90e5-e2c52012abb0` repeated the cap, full-scene, and
+196-component checks with SELinux enforcing. The helper was no longer running
+after activation, and Meta's package verifier remained enabled.
+
+155. Subsequent stability testing corrected the account-removal scope recorded
+in findings 127-130. The hardware account type and authenticator are part of
+Portal device identity rather than a removable user login. Disabling
+`HWAuthenticatorService` caused camera/platform startup instability. The final
+implementation removes only proxy SSO, platform-login, and private-owner
+accounts and disables their three authenticators; it explicitly re-enables the
+hardware authenticator. The current verifier requires zero user accounts,
+three disabled user authenticators, and the hardware authenticator enabled.
