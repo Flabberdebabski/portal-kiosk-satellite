@@ -1687,3 +1687,72 @@ implementation removes only proxy SSO, platform-login, and private-owner
 accounts and disables their three authenticators; it explicitly re-enables the
 hardware authenticator. The current verifier requires zero user accounts,
 three disabled user authenticators, and the hardware authenticator enabled.
+
+156. Investigated a persistent 80% charge limit on Portal Go firmware
+`5051355900018050`. The desired policy is to charge while externally powered
+below 80%, stop charging at 80% while leaving the adapter connected to the
+system rail, and resume when the reported state of charge reaches 79%. The
+ISL9538 charger driver already implements this exact hysteresis in its monitor
+work. It reads `isl,hi-chg-lmt`, `isl,hi-poll-thr`, and `isl,hi-clr-thr` from
+the device tree, sets `batthi_disable_charging` at or above the high limit,
+clears it at or below the clear threshold, and then changes only the battery
+charge current. Boot logs confirm that Meta ships the values as 99, 97, and
+95. A device-tree profile of 80, 78, and 79 would therefore implement the
+requested behavior inside the existing kernel driver without an Android
+polling service or intentional discharge cycles.
+
+The available data-only persistence routes cannot change those thresholds.
+The device tree is covered by the locked, green AVB chain, and the driver has
+no runtime sysfs attributes for its three threshold fields. The writable
+`disable_charging` and `vsys_status` attributes can enact one decision but do
+not retain a policy across reboot.
+
+The boot-capable privileged services were checked as possible controller
+hosts. Meta's battery-state HAL has write permission to battery sysfs but only
+implements read-only HIDL getters and has no configuration or dynamic-code
+hook. The Android health HAL is likewise a stock reader. Thermal Engine can
+write battery sysfs, but its configuration and executable are on verified
+vendor partitions. Its `ro.vendor.extension_library` hook is already assigned
+to Qualcomm's `libqti-perfd-client.so`, is a non-persistent read-only property,
+and the Thermal Engine domain cannot execute a replacement from `/data`.
+
+Qualcomm's performance HAL can be called by the existing AIService helper and
+can write battery-labelled sysfs, so its exact service, glue layer, and
+resource library were extracted and inspected. The full
+`commonresourceconfigs.xml` and `targetresourceconfigs.xml` resource maps cover
+CPU, scheduler, memory, GPU, display, and storage controls; neither contains a
+battery or charger node. Its writable `/data/vendor/perfd` state stores only
+FPS and reset values and cannot add a resource path. The relevant extracted
+SHA-256 values were:
+
+- performance HAL service:
+  `ef0731bf134709ef6019b17e0d652cdbc9ffd94a117ff2acb10c5069ea868025`
+- `libqti-perfd.so`:
+  `8fddfba2a547968bf2fe81ccb8628f6daaaf993a8d2a926bb83b66fa5df0b49c`
+- `libperfgluelayer.so`:
+  `fe8259fa286dd5c053f9986be3f6839cdda02b0643154a3e77456e77e167bad8`
+- `libperfconfig.so`:
+  `f152eab81ed323028a3bd7612fef0c8a23077a60fc9a35a291d7ee44df1c1990`
+
+Meta's stock `com.facebook.aloha.chargecontrol` app runs in the one application
+SELinux domain that can write the charger attributes. It is not a usable 80%
+controller: its service is non-exported, it has no boot receiver or native
+loader, its threshold is hard-coded at 55%, and above that value it starts a
+CPU busy-wait workload to drain the battery. Modifying its APK would require
+Meta's platform signature. Substituting compiled ART cache files would be
+firmware-specific, subject to checksum validation and dexopt replacement, and
+is not considered a durable or supportable boot mechanism.
+
+Automatically running GhostLock after every boot is also excluded. Its
+current reclaim primitive disturbs `proc_uid_lock`; leaving that boot alive
+after a privileged action creates a later freeze or panic risk. The extraction
+run was followed by the normal two-reboot verifier. Final boot
+`c8296be6-2d0f-4e6f-9ffd-845f5387dd38` returned to enforcing SELinux with the
+audio watchdog and wireless ADB healthy.
+
+Current result: the clean implementation is a device-tree change to
+`hi-chg-lmt=80`, `hi-poll-thr=78`, and `hi-clr-thr=79`. Deploying it requires
+either a bootloader/AVB unlock, a signed boot or DTBO image accepted by the
+Portal, or a separately verified early-boot execution hook. Until one of
+those exists, the current provisioning exploit cannot safely make an 80%
+charge controller survive reboot, so no battery-limit option is exposed.
