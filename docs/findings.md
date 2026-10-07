@@ -1839,3 +1839,57 @@ the Portal or a filtering DNS configuration with no unfiltered resolver
 advertised. Domain policy should cover `facebook.com`,
 `mqtt-mini.facebook.com`, and `graph.facebook.com`; fixed Meta IPs rotate and
 are unsuitable for a provisioner rule.
+
+161. Completed a read-only bootloader, OTA, and recovery survey for Portal Go
+firmware `5051355900018050`. USB fastboot identifies product `terry`, current
+slot B, locked and critical-locked state, green verified boot, and
+`get_unlock_ability: 0`. Meta's `flashing unlock_bootloader` handler accepts an
+exact 344-byte request containing a fixed header, two device-bound 32-byte
+values, and a 2048-bit RSA signature. It verifies the signature before writing
+the authoritative unlock permission through the secure/RPMB-backed device
+state. Neither the public OTA nor the installed Meta packages contains the
+private signer or an online signing endpoint.
+
+The Qualcomm raw-`devinfo` fallback is unreachable on the retail configuration:
+VerifiedBootDxe selects it only for a non-secure device or unprovisioned RPMB.
+Changing raw `devinfo` offset `0x9a8` from 0 to 1 therefore left fastboot's
+unlock ability at 0. The change was reversed with a full-image guard. A
+post-reboot capture of the restored 4 KiB image is byte-for-byte identical to
+the saved original, SHA-256
+`ccc2e8089b5aae8a2e854ea25e8dc9d250f008cbf239f58931637df6baced8df`.
+The ineffective provisioner mode and all device-side staging files were
+removed.
+
+The other known Qualcomm fallbacks do not apply. `toolsfv` is entirely zero,
+its GUID and name are absent from Portal XBL, and XBL configuration loads the
+signed embedded LinuxLoader firmware volume. The extracted ABL LinuxLoader
+sets AVB mode to 2 as a compile-time constant, so hiding `vbmeta` cannot select
+the older no-AVB branch. The kernel is also built without `CONFIG_KEXEC` and
+without EFI runtime support.
+
+Parsed the exact Meta full OTA using Android's documented
+[`DeltaArchiveManifest`](https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/update_metadata.proto).
+The manifest updates 21 partitions: `xbl`, `xbl_config`, `tz`, `aop`, `hyp`,
+`keymaster`, `cmnlib`, `cmnlib64`, `modem`, `dsp`, `bluetooth`, `devcfg`,
+`qupfw`, `abl`, `boot`, `dtbo`, `system`, `vendor`, `vbmeta`,
+`vbmeta_system`, and `recovery`. It contains no Firehose or other EDL service
+programmer. Recovery was reconstructed from 32 payload operations; its
+67,108,864-byte image matches the manifest hash
+`5dd937a5b04f3760f416402692716c25361bd00e1553b8f196d7bff8a4d22c68`.
+
+The recovered Android 10 `fastbootd` checks the bootloader lock before every
+download, flash, erase, slot-change, and logical-partition mutation. Its
+`android.hardware.fastboot@1.0-impl-mock.so` supplies no OEM unlock path, and
+the binary exposes no partition-fetch command. Static comparison against
+Qualcomm's public ABL tree found several post-build fastboot hardening commits,
+but the affected display-panel, GPU, hardware-fence, audio-framework, and UBI
+commands are absent from Meta's compiled fastboot command table or require
+unlocked flashing. No reachable locked-fastboot primitive was identified.
+
+EDL remains recovery-grade only if a programmer signed for Meta's secure-boot
+root can be obtained. Public searches found generic SDM710/QCS605 programmers
+for other OEM roots, which are not interchangeable with a Meta-signed loader.
+The device was not placed in EDL. Current conclusion: the supported GhostLock
+route provides temporary Android kernel privilege sufficient for guarded
+data-partition provisioning, but no verified bootloader/AVB unlock path is
+currently available.

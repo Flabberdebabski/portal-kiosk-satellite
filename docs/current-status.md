@@ -431,3 +431,43 @@ clean verification boots `441ba1cc-e5fe-4f61-87ef-d97884b0354f` and
 task after the final boot, both Meta camera streams and the Kiosk Satellite
 camera client were active, and the persistent audio watchdog again verified
 AEC and NS at zero.
+
+## Bootloader and recovery research
+
+The Portal Go exposes Qualcomm fastboot over USB as product `terry`, but the
+retail device remains locked and reports `get_unlock_ability: 0`. Meta's added
+unlock command uses a device-bound 344-byte request: a fixed header and two
+32-byte device values followed by a 2048-bit RSA signature. ABL verifies that
+signature before it changes the authoritative unlock permission stored through
+the secure/RPMB path. The public firmware and installed Meta applications do
+not contain the corresponding signer.
+
+Writing the similarly named byte in the raw `devinfo` partition was tested and
+disproved. Fastboot continued to report unlock ability 0 because the retail
+secure-device path does not use that raw fallback. The experimental byte was
+subsequently restored to its exact original 4 KiB image; the verified restored
+SHA-256 is
+`ccc2e8089b5aae8a2e854ea25e8dc9d250f008cbf239f58931637df6baced8df`.
+The experimental host option and device staging files were removed.
+
+Two other Qualcomm boot-chain paths are absent on this build. The `toolsfv`
+partition is zero-filled and XBL is configured to load its signed embedded ABL
+firmware volume. ABL also selects AVB 2 at compile time, so removing or
+renaming `vbmeta` would make the slot fail verification rather than enter an
+unverified fallback mode.
+
+The exact full OTA payload was parsed according to Android's
+[`DeltaArchiveManifest`](https://android.googlesource.com/platform/system/update_engine/+/refs/heads/main/update_metadata.proto).
+It contains 21 normal target partitions and no EDL Firehose or service
+programmer. The recovery image reconstructed from that manifest matches its
+signed SHA-256 and contains Android 10 userspace fastboot. Its `fastbootd`
+rejects download, flash, erase, slot, and logical-partition mutations while the
+device is locked; the bundled vendor fastboot HAL is the AOSP mock and provides
+no alternate Meta unlock operation.
+
+The remaining EDL route requires a Firehose programmer accepted by Meta's
+secure-boot root. No Meta-signed QCS605/SDM710 programmer has been found in the
+OTA, public Meta source, or public firmware artifacts. Entering EDL without
+one would add recovery risk without enabling a write. The current result is
+therefore temporary Android kernel privilege with durable data-partition
+provisioning, not a bootloader or AVB unlock.
