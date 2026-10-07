@@ -1913,3 +1913,20 @@ fatal process exit. Affinity handling now captures the original allowed mask
 once, preserves exact pins for available CPUs, falls back to the original mask
 for unavailable observer targets, and restores that saved mask instead of an
 invalid all-CPU bitset. The arm64 preload rebuilt cleanly with this change.
+
+163. The reporter's next run confirmed both portability fixes: the constrained
+device mask rejected CPUs 4 and 5, the new affinity fallback kept the route
+running, and attempt 9 completed root provisioning with the temporary sentinel
+installed and removed as intended. The subsequent first-boot verifier found
+that all 197 component disables had reverted. Root-side PackageManager calls
+reported success immediately, but the host rebooted on that final marker
+before system_server's asynchronous `package-restrictions.xml` write reached
+disk. This also explains why removed Meta accounts could reappear: their three
+authenticator component disables shared the same persistence race.
+
+The root component batch now withholds its final marker for the same 15-second
+settlement period already used for host-side package changes, followed by
+`sync()`. Account-only provisioning applies that settlement directly after its
+authenticator changes; combined account and debloat runs share the final
+component batch's wait. The host therefore cannot initiate its immediate
+verification reboot until the PackageManager state has had time to persist.

@@ -33,6 +33,14 @@ the device cpuset falls back to that original mask. This keeps the optional
 watcher schedulable on Portal configurations that do not expose CPU 7 and
 avoids terminating the exploit on `sched_setaffinity(...): EINVAL`.
 
+PackageManager component changes made during the privileged process now delay
+their final success marker for 15 seconds and call `sync()` before the host
+reboots. Android reports `pm disable` success before it asynchronously writes
+`package-restrictions.xml`; without that window, a clean device could lose all
+197 cloud-component disables and the three Meta-authenticator disables at the
+first reboot. Package-level debloat already used the same host-side settlement
+window.
+
 Meta's installed Binder stubs establish the exact private audio protocol:
 
 - Service manager: `com.facebook.IAudioServiceManager`
