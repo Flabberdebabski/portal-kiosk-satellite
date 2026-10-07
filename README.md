@@ -493,9 +493,13 @@ packages that the Portal and Kiosk Satellite still need.
 Two firmware-owned MQTT entry points are deliberately retained because each
 self-enables before use; disabling either caused a service restart loop during
 testing. The remaining MQTT components are disabled. To stop the retained
-core client from reaching `mqtt-mini.facebook.com`, block that hostname with
-your network DNS or firewall. The component list is maintained in
-`tools/meta_debloat_components.py`.
+core client from reaching Meta, apply a source-specific router rule for the
+Portal or block `mqtt-mini.facebook.com`, `graph.facebook.com`, and
+`facebook.com` with the only DNS resolver advertised to the device. Android's
+opportunistic Private DNS can use any advertised resolver that accepts DNS over
+TLS, so a public fallback resolver can bypass a local DNS block list. Fixed-IP
+rules are brittle because Meta rotates these names across its address space.
+The component list is maintained in `tools/meta_debloat_components.py`.
 
 Before changing package state, the provisioner saves the exact enabled,
 disabled, or absent state of every package in

@@ -1806,3 +1806,36 @@ SHA-256 `9326f711df469e5483a77e335de3cb7b4799faef0ed51e568f33c7d7dff62c13`,
 then installed successfully through shell Package Manager. The device reported
 version code 309, Shizuku continued as shell, and Kiosk Satellite remained the
 persistent HOME activity.
+
+160. Attributed the remaining Meta network traffic after debloat. The native
+init service `/vendor/bin/ping-service -t 60`, running as UID 1000, repeatedly
+probes the local gateway, `1.1.1.1`, and `facebook.com`. Its rotating
+`facebook.com` results included `57.144.162.1` and `157.240.14.35`. The service
+has an unconditional `class late_start` declaration in
+`/vendor/etc/init/ping-service.rc`; disabling the Java Wi-Fi diagnostics package
+did not stop it and was reverted.
+
+The `57.144.162.145` traffic correlated with the DGW realtime transport inside
+`com.facebook.alohaservices.alohausers` (UID 10044). The process logged an idle
+timeout and successful DGW reconnection about every 30 seconds, and its
+`MqttLite` keepalive alarm remained active. The package cannot be disabled
+because AIService binds its hardware-identity service, and disabling only the
+MQTT component was already shown to trigger a self-enable/failure loop. Marking
+the Wi-Fi network metered and applying Android's UID 10044 background blacklist
+also failed because AIService keeps the process visible; both policy changes
+were reverted.
+
+The native `otad` service additionally attempted `graph.facebook.com` while
+the local OTA MobileConfig override still reported the update gate false. Like
+the ping daemon, it is an unconditional init `late_start` service on a verified
+partition. Neither can be stopped durably by the current data-only persistence
+mechanisms.
+
+The active Wi-Fi configuration advertised `fd42::1`, `192.168.1.1`, and
+`1.1.1.1` as resolvers. Android selected and validated `1.1.1.1` for
+opportunistic Private DNS, which can bypass filtering configured only on the
+local resolver. The safe durable controls are a source-specific router rule for
+the Portal or a filtering DNS configuration with no unfiltered resolver
+advertised. Domain policy should cover `facebook.com`,
+`mqtt-mini.facebook.com`, and `graph.facebook.com`; fixed Meta IPs rotate and
+are unsuitable for a provisioner rule.

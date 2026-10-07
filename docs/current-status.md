@@ -334,6 +334,26 @@ caused a repeat service failure/restart cycle, so component state is not a safe
 way to suppress the final firmware-owned MQTT connection. Network DNS or
 firewall policy remains the safe control for `mqtt-mini.facebook.com`.
 
+Live network attribution on October 7, 2026 separated the remaining Meta
+traffic. `57.144.162.1` and `157.240.14.35` were rotating `facebook.com`
+addresses reached by `/vendor/bin/ping-service -t 60`; the daemon probes the
+gateway, `1.1.1.1`, and `facebook.com` every cycle. Its init declaration is
+unconditional, and disabling `com.facebook.aloha.wifidiagnostic` did not stop
+the native probes. `57.144.162.145` corresponded to the repeatedly reconnecting
+DGW realtime transport in the retained `alohausers` process. The native OTA
+daemon also continued attempting `graph.facebook.com` even while the local
+firmware-update gate reported false.
+
+The tested Android per-UID metered blacklist did not stop `alohausers` because
+AIService keeps it in a visible service state. All experimental package,
+metered-network, and UID-policy changes were restored. The device's active
+network advertised the local resolvers plus `1.1.1.1`, and Android validated
+the latter as opportunistic Private DNS. A local block list is therefore only
+reliable when the network advertises no unfiltered fallback resolver. A
+source-specific router firewall rule or exclusive filtering DNS remains the
+safe durable control; fixed destination IPs are not stable enough to encode in
+the provisioner.
+
 Meta's arbitrary analysis throttle is backed by
 `/settings/aloha/enable_analysis_throttle` and
 `/settings/aloha/analysis_throttle_fps` in AIService's preferences database.
