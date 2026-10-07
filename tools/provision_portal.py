@@ -112,6 +112,8 @@ PRESENCE_LOG_MARKER = "Notify people presence"
 PRESENCE_ANALYSIS_FRAME_MARKER = "Frame available for analysis stream"
 PRESENCE_ROI_FRAME_MARKER = "Frame available for roi stream"
 PRESENCE_WIDE_FRAME_MARKER = "Disabled hardware cropping"
+PRESENCE_LIGHTWEIGHT_WIDTH = 640
+PRESENCE_LIGHTWEIGHT_HEIGHT = 480
 CAMERA_SERVICE_COMPONENT = (
     "com.facebook.portal.aiservice/"
     "com.facebook.alohaapp.app.services.CameraService"
@@ -140,6 +142,8 @@ class PortalProvisioner:
         restore_presence_profile: bool = False,
         presence_fps_cap: int | None = None,
         restore_presence_fps: bool = False,
+        lightweight_presence: bool = False,
+        restore_lightweight_presence: bool = False,
         privacy_dns: str | None = None,
         restore_privacy_dns: bool = False,
         allow_app_updates: bool = False,
@@ -168,6 +172,8 @@ class PortalProvisioner:
         self.restore_presence_profile = restore_presence_profile
         self.presence_fps_cap = presence_fps_cap
         self.restore_presence_fps = restore_presence_fps
+        self.lightweight_presence = lightweight_presence
+        self.restore_lightweight_presence = restore_lightweight_presence
         self.privacy_dns = privacy_dns
         self.restore_privacy_dns = restore_privacy_dns
         self.allow_app_updates = allow_app_updates
@@ -195,6 +201,8 @@ class PortalProvisioner:
             result = subprocess.run(
                 args,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 timeout=timeout,
@@ -368,6 +376,8 @@ class PortalProvisioner:
             "optimize_presence",
             "restore_presence_profile",
             "restore_presence_fps",
+            "lightweight_presence",
+            "restore_lightweight_presence",
             "restore_privacy_dns",
             "allow_app_updates",
             "restore_app_verifier",
@@ -381,6 +391,15 @@ class PortalProvisioner:
         if self.presence_fps_cap is not None:
             actions["presence_fps_cap"] = self.presence_fps_cap
         return actions
+
+    def current_presence_analysis_resolution(self) -> tuple[str, str]:
+        camera = self.adb_run(
+            ["shell", "dumpsys", "media.camera"], timeout=20, check=True
+        ).stdout
+        match = re.search(r"ImageReader-(\d+)x(\d+)f23m3-", camera)
+        if match is None:
+            raise ProvisionError("AIService analysis surface is absent")
+        return match.group(1), match.group(2)
 
     def tool_revision(self) -> str:
         result = self.run(
@@ -555,6 +574,15 @@ class PortalProvisioner:
         presence_fps_value = shell(
             "cat", "/data/local/tmp/portal-presence-backup/fps-cap-v1", timeout=5
         )
+        analysis_resolution_match = re.search(
+            r"ImageReader-(\d+)x(\d+)f23m3-", camera
+        )
+        lightweight_presence_installed = exists(
+            "/data/local/tmp/portal-presence-backup/lightweight-installed-v1"
+        )
+        lightweight_presence_restored = exists(
+            "/data/local/tmp/portal-presence-backup/lightweight-restored-v1"
+        )
         applied_fps_match = re.search(
             r"Setting AI Processing FPS\s+([0-9]+(?:\.[0-9]+)?)", logs
         )
@@ -715,6 +743,13 @@ class PortalProvisioner:
                 "analysis_fps_helper_key_authorized": exists(
                     PRESENCE_SAVED_KEY_REMOTE
                 ),
+                "analysis_resolution": (
+                    "x".join(analysis_resolution_match.groups())
+                    if analysis_resolution_match
+                    else None
+                ),
+                "lightweight_camera_installed": lightweight_presence_installed,
+                "lightweight_camera_restored": lightweight_presence_restored,
                 "profile_keys_loaded": profile_keys,
                 "full_scene_profile": (
                     PRESENCE_WIDE_FRAME_MARKER in logs
@@ -784,6 +819,8 @@ class PortalProvisioner:
                 self.restore_presence_profile,
                 self.presence_fps_cap is not None,
                 self.restore_presence_fps,
+                self.lightweight_presence,
+                self.restore_lightweight_presence,
                 self.shizuku,
                 self.remove_shizuku,
             )
@@ -1455,6 +1492,8 @@ class PortalProvisioner:
             "restore_presence_profile",
             "presence_fps_cap",
             "restore_presence_fps",
+            "lightweight_presence",
+            "restore_lightweight_presence",
             "privacy_dns",
             "restore_privacy_dns",
             "allow_app_updates",
@@ -1842,6 +1881,17 @@ class PortalProvisioner:
         if self.restore_presence_fps:
             environment["GHOSTLOCK_RESTORE_PRESENCE_FPS"] = "1"
             environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
+        if self.lightweight_presence:
+            old_width, old_height = self.current_presence_analysis_resolution()
+            environment.update(
+                {
+                    "GHOSTLOCK_LIGHTWEIGHT_PRESENCE": "1",
+                    "GHOSTLOCK_PRESENCE_OLD_WIDTH": old_width,
+                    "GHOSTLOCK_PRESENCE_OLD_HEIGHT": old_height,
+                }
+            )
+        if self.restore_lightweight_presence:
+            environment["GHOSTLOCK_RESTORE_LIGHTWEIGHT_PRESENCE"] = "1"
         if self.restore_presence_profile:
             environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
         if (
@@ -1947,6 +1997,16 @@ class PortalProvisioner:
         if self.restore_presence_fps:
             expected_markers["presence_fps_restore"] = (
                 "PORTAL_PRESENCE_FPS action=restore",
+                True,
+            )
+        if self.lightweight_presence:
+            expected_markers["lightweight_presence"] = (
+                "lightweight presence install",
+                True,
+            )
+        if self.restore_lightweight_presence:
+            expected_markers["lightweight_presence_restore"] = (
+                "lightweight presence restore",
                 True,
             )
         if self.restore_presence_profile:
@@ -2864,6 +2924,61 @@ class PortalProvisioner:
             f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
         )
 
+    def verify_lightweight_presence(self, restored: bool = False) -> None:
+        width, height = self.current_presence_analysis_resolution()
+        if restored:
+            backup = self.adb_run(
+                [
+                    "shell",
+                    "cat",
+                    "/data/local/tmp/portal-presence-backup/"
+                    "analysis-resolution-before-v1",
+                ],
+                timeout=5,
+                check=True,
+            ).stdout
+            match = re.fullmatch(
+                r"width=(absent|\d+)\nheight=(absent|\d+)\n", backup
+            )
+            if match is None:
+                raise ProvisionError("invalid presence-resolution backup")
+            expected_width = "1024" if match.group(1) == "absent" else match.group(1)
+            expected_height = "768" if match.group(2) == "absent" else match.group(2)
+            if (width, height) != (expected_width, expected_height):
+                raise ProvisionError(
+                    "presence analysis resolution was not restored: "
+                    f"actual={width}x{height} "
+                    f"expected={expected_width}x{expected_height}"
+                )
+            print(
+                "LIGHTWEIGHT_PRESENCE_RESTORE_OK "
+                f"resolution={width}x{height}"
+            )
+            return
+
+        expected = (
+            str(PRESENCE_LIGHTWEIGHT_WIDTH),
+            str(PRESENCE_LIGHTWEIGHT_HEIGHT),
+        )
+        if (width, height) != expected:
+            raise ProvisionError(
+                "lightweight presence surface did not persist: "
+                f"actual={width}x{height} "
+                f"expected={expected[0]}x{expected[1]}"
+            )
+        camera = self.adb_run(
+            ["shell", "dumpsys", "media.camera"], timeout=20, check=True
+        ).stdout
+        virtual_active = "Client Package Name: me.jxl.kiosk_satellite" in camera
+        if virtual_active and "Dims: 1280 x 720, format 0x7fa30c06" not in camera:
+            raise ProvisionError(
+                "the independent Kiosk Satellite virtual-camera surface is absent"
+            )
+        print(
+            "LIGHTWEIGHT_PRESENCE_OK analysis=640x480 "
+            f"virtual_camera={'1280x720' if virtual_active else 'dormant'}"
+        )
+
     def verify_meta_accounts_removed(self) -> None:
         accounts = self.meta_accounts()
         if accounts:
@@ -2927,6 +3042,7 @@ class PortalProvisioner:
             self.optimize_presence
             or self.presence_fps_cap is not None
             or self.restore_presence_fps
+            or self.lightweight_presence
         ):
             self.verify_presence_runtime(
                 require_profile=True,
@@ -2934,6 +3050,10 @@ class PortalProvisioner:
             )
         if self.restore_presence_profile:
             self.verify_presence_runtime(require_profile=False)
+        if self.lightweight_presence:
+            self.verify_lightweight_presence()
+        if self.restore_lightweight_presence:
+            self.verify_lightweight_presence(restored=True)
         if self.privacy_dns or self.restore_privacy_dns:
             self.verify_privacy_dns()
         if self.allow_app_updates or self.restore_app_verifier:
@@ -2960,6 +3080,23 @@ class PortalProvisioner:
             f"logs={self.log_dir}"
         )
 
+    def completed_lightweight_recovery_stage(self) -> bool:
+        if not self.lightweight_presence:
+            return False
+        allowed = {"lightweight_presence", "optimize_presence", "presence_fps_cap"}
+        if not set(self.requested_actions()).issubset(allowed):
+            return False
+        markers = (
+            "/data/local/tmp/portal-presence-backup/installed-v1",
+            "/data/local/tmp/portal-presence-backup/fps-cap-v1",
+            "/data/local/tmp/portal-presence-backup/lightweight-installed-v1",
+        )
+        return all(
+            self.adb_run(["shell", "test", "-f", marker], timeout=5).returncode
+            == 0
+            for marker in markers
+        )
+
     def provision(self) -> None:
         self.connect(wait_seconds=30)
         if self.status_only:
@@ -2973,6 +3110,18 @@ class PortalProvisioner:
             if not self.recover_actions():
                 return
             self.recover = False
+            if self.completed_lightweight_recovery_stage():
+                boot_id = self.adb_run(
+                    ["shell", "cat", "/proc/sys/kernel/random/boot_id"],
+                    timeout=5,
+                    check=True,
+                ).stdout.strip()
+                print(
+                    "RECOVER_VERIFY installed_stage=lightweight_presence "
+                    f"boot_id={boot_id}"
+                )
+                self.verify_across_two_reboots(first_boot=boot_id)
+                return
         if self.dry_run:
             self.verify_target(require_supported=False)
             status = self.print_status()
@@ -3026,6 +3175,8 @@ class PortalProvisioner:
             or self.restore_presence_profile
             or self.presence_fps_cap is not None
             or self.restore_presence_fps
+            or self.lightweight_presence
+            or self.restore_lightweight_presence
             or (self.device_owner and not already_owner)
             or (self.remove_meta_accounts and not already_meta_clean)
             or self.shizuku
@@ -3267,6 +3418,15 @@ def parse_args() -> argparse.Namespace:
             "AIService's analysis and pose pipeline to remain live"
         ),
     )
+    presence_group.add_argument(
+        "--lightweight-presence",
+        action="store_true",
+        help=(
+            "apply the full-scene presence profile, cap Meta analysis at "
+            "2 FPS, and reduce only its private analysis surface to 640x480; "
+            "Kiosk Satellite's virtual camera and RTSP resolution are unchanged"
+        ),
+    )
     parser.add_argument(
         "--presence-fps-cap",
         type=int,
@@ -3321,6 +3481,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     presence_group.add_argument(
+        "--restore-lightweight-presence",
+        action="store_true",
+        help=(
+            "restore the AIService analysis resolution saved by "
+            "--lightweight-presence while retaining other presence settings"
+        ),
+    )
+    presence_group.add_argument(
         "--restore-presence-fps",
         action="store_true",
         help=(
@@ -3348,6 +3516,10 @@ def parse_args() -> argparse.Namespace:
         # The activation activity also applies Meta's other camera toggles.
         # Always pair the cap with the tested full-scene presence profile.
         args.optimize_presence = True
+    if args.lightweight_presence:
+        args.optimize_presence = True
+        if args.presence_fps_cap is None:
+            args.presence_fps_cap = 2
     if args.profile == "kiosk":
         conflicting = [
             flag
@@ -3357,6 +3529,10 @@ def parse_args() -> argparse.Namespace:
                 (args.restore_bloat, "--restore-bloat"),
                 (args.restore_presence_profile, "--restore-presence-profile"),
                 (args.restore_presence_fps, "--restore-presence-fps"),
+                (
+                    args.restore_lightweight_presence,
+                    "--restore-lightweight-presence",
+                ),
                 (args.restore_app_verifier, "--restore-app-verifier"),
             )
             if enabled
@@ -3387,6 +3563,8 @@ def parse_args() -> argparse.Namespace:
             args.restore_presence_profile,
             args.presence_fps_cap is not None,
             args.restore_presence_fps,
+            args.lightweight_presence,
+            args.restore_lightweight_presence,
             args.privacy_dns,
             args.restore_privacy_dns,
             args.allow_app_updates,
@@ -3435,6 +3613,8 @@ def main() -> int:
             restore_presence_profile=args.restore_presence_profile,
             presence_fps_cap=args.presence_fps_cap,
             restore_presence_fps=args.restore_presence_fps,
+            lightweight_presence=args.lightweight_presence,
+            restore_lightweight_presence=args.restore_lightweight_presence,
             privacy_dns=args.privacy_dns,
             restore_privacy_dns=args.restore_privacy_dns,
             allow_app_updates=args.allow_app_updates,

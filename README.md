@@ -61,6 +61,10 @@ All changes are persistent and survive reboots.
   camera sensor and Kiosk Satellite's independent RTSP stream at their normal
   configured frame rates. A device-local helper reapplies the cap after every
   boot and then exits.
+- **[Lightweight presence mode](#lightweight-presence-mode):** combines the
+  full-scene profile and 2 FPS analysis cap with a smaller 640-by-480 Meta
+  analysis surface. This reduces Meta's analysis pixel count without changing
+  the full field of view or Kiosk Satellite's separate camera and RTSP streams.
 - **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
   installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
   manager and starts its service with Android's ADB-shell identity after every
@@ -134,7 +138,7 @@ the first exploit attempt succeeds.
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
   `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku` or
-  `--presence-fps-cap`
+  `--presence-fps-cap` (including `--lightweight-presence`)
 - Internet access to download the pinned official Shizuku APK, or a local APK
   supplied with `--shizuku-apk PATH`
 
@@ -328,8 +332,8 @@ The `kiosk` profile expands to the audio, Device Owner, update blocking,
 debloat, Meta-account removal, presence optimization, and third-party app
 update actions. You may add `--privacy-dns HOSTNAME` when you operate a
 DNS-over-TLS filtering resolver, or `--shizuku` when apps on the Portal need
-Shizuku's shell-level APIs. Add `--presence-fps-cap 2` when reduced Meta
-analysis CPU use is more important than its default analysis cadence.
+Shizuku's shell-level APIs. Add `--lightweight-presence` for the tested
+full-scene, 2 FPS, 640-by-480 Meta presence configuration.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. For a stock Portal, also keep USB connected and follow the ADB
@@ -355,6 +359,7 @@ available rollback.
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
+| Use the full lightweight presence preset | `--lightweight-presence` | Yes | `--restore-lightweight-presence` and the other presence rollback flags |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
 | Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
 | Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
@@ -552,6 +557,46 @@ python3 tools/provision_portal.py \
 
 The installer and restore action use atomic file replacement, preserve the
 app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
+
+#### Lightweight presence mode
+
+For a smaller Meta analysis surface that retains the complete scene, run:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --lightweight-presence
+```
+
+This preset applies the full-scene presence profile, caps Meta's analysis
+callback at 2 FPS, and changes only AIService's private YUV analysis surface
+from 1024 by 768 to 640 by 480. It leaves AIService's 2048-by-1536 auxiliary
+camera surface in place because that stream is part of the firmware's camera
+session contract. The smaller analysis surface preserves the full field of
+view; it changes pixel count, not cropping.
+
+Kiosk Satellite opens the Portal's virtual camera as camera ID 0. That client,
+its gesture analysis, and its RTSP encoder remain separate from AIService's
+camera ID 1 analysis surface. On the tested Portal Go, simultaneous capture
+retained AIService's 640-by-480 analysis surface, its 1280-by-720 virtual-camera
+output, and Kiosk Satellite's requested 640-by-480 gesture inputs. The change
+therefore does not reduce the amount of work Kiosk Satellite performs for
+finger counting. It provides a modest reduction in Meta-side analysis work;
+the 2048-by-1536 auxiliary stream means it does not materially remove the
+camera provider's main load.
+
+The camera dimensions are stored as vendor persistent properties. The
+temporary-root installer sets them through the camera HAL security domain,
+saves the original effective dimensions, and verifies the actual AIService
+surface on two normal boots. Restore only the original Meta analysis
+resolution while keeping the full-scene profile and FPS cap with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-lightweight-presence
+```
+
+Use `--restore-presence-fps` and `--restore-presence-profile` as well when you
+want to remove the other two parts of the preset.
 
 #### Optional presence-analysis frame-rate cap
 

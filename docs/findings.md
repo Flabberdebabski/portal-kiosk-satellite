@@ -1756,3 +1756,42 @@ either a bootloader/AVB unlock, a signed boot or DTBO image accepted by the
 Portal, or a separately verified early-boot execution hook. Until one of
 those exists, the current provisioning exploit cannot safely make an 80%
 charge controller survive reboot, so no battery-limit option is exposed.
+
+157. Traced the relationship between AIService presence analysis and Kiosk
+Satellite's gesture camera. Meta's physical camera ID 1 normally creates a
+1024-by-768 YUV analysis surface, a 2048-by-1536 auxiliary surface, and a
+1280-by-720 private output consumed by the virtual-camera stack. Kiosk
+Satellite opens virtual camera ID 0 separately and requested two 640-by-480
+inputs while its finger-count feature was active. Reducing Meta's YUV surface
+therefore does not reduce Kiosk Satellite's own gesture-model input or frame
+rate.
+
+AIService reads the analysis dimensions from
+`persist.camera.ml.surface.dim.w` and `persist.camera.ml.surface.dim.h`.
+Android labels these properties `camera_prop`: shell cannot read them and a
+root process in the ordinary su domain cannot set them. During the exploit's
+existing permissive interval, running `/system/bin/setprop` through
+`runcon u:r:hal_camera_default:s0` writes them successfully. A direct attempt
+to append the values to Android's serialized persistent-property file was
+rejected during the next boot and was not retained.
+
+The reversible `--lightweight-presence` action now applies the tested
+full-scene profile, selects 2 FPS unless another valid cap was supplied, saves
+the original effective analysis dimensions, and requests 640 by 480.
+Verification reads the actual active camera surface rather than relying on
+shell-inaccessible property values. It passed consecutive enforcing boots
+`92cbabe5-2a06-4dbb-b4d9-00b1eeca2ad9` and
+`0ed22c3f-c087-4fa4-af76-eda901eb6824` with full-scene analysis, live ROI and
+analysis frames, and populated pose metrics. With Kiosk Satellite active, the
+camera dump simultaneously showed the 2048-by-1536 auxiliary stream,
+640-by-480 Meta YUV analysis, 1280-by-720 private virtual output, and the
+application's independent 640-by-480 camera ID 0 inputs.
+
+Twelve live CPU samples with both camera clients active averaged 43.4% for
+AIService, 38.0% for Kiosk Satellite, 125.2% for the camera provider, 18.7%
+for cameraserver, and 8.4% for VirtualCameraManager. This was not a matched
+scene-controlled A/B test. It shows that the resolution change leaves the
+dominant 2048-by-1536 provider work intact and should be described as a modest
+Meta-side optimization. It does not lower Kiosk Satellite's finger-count CPU
+cost. `--restore-lightweight-presence` returns the Meta analysis surface to
+the saved dimensions without removing the full-scene or FPS settings.

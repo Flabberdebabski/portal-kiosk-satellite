@@ -209,6 +209,35 @@ earlier 47.8% stock baseline and 22.1% cropped profile.
 Kiosk Satellite field testing after the final reboot confirmed that presence
 coverage again spans the full scene with the background detector still off.
 
+The optional `--lightweight-presence` preset keeps that full-scene profile,
+selects the tested 2 FPS analysis cap, and reduces only AIService's private YUV
+analysis surface from 1024 by 768 to 640 by 480. The dimensions come from
+`persist.camera.ml.surface.dim.w` and `.h`. Those vendor properties carry the
+`camera_prop` label, so even temporary UID 0 cannot set them from the normal
+shell or su domain. During the already-permissive exploit window, the native
+installer executes `setprop` in `u:r:hal_camera_default:s0`, records the
+original effective dimensions, and then returns the device to its normal
+enforcing boot.
+
+The new surface and full-scene pipeline passed unattended checks on boots
+`92cbabe5-2a06-4dbb-b4d9-00b1eeca2ad9` and
+`0ed22c3f-c087-4fa4-af76-eda901eb6824`. Both had live analysis and ROI frames,
+populated pose metrics, the five full-scene settings, and the 2 FPS callback.
+With Kiosk Satellite active afterward, camera ID 1 retained its
+2048-by-1536 auxiliary surface, used 640 by 480 for YUV analysis, and supplied
+the 1280-by-720 private virtual-camera output. Kiosk Satellite independently
+opened camera ID 0 with its requested 640-by-480 gesture surfaces.
+
+A twelve-sample live run with both clients active averaged 43.4% of one core
+for AIService, 38.0% for Kiosk Satellite, 125.2% for the camera provider,
+18.7% for cameraserver, and 8.4% for VirtualCameraManager. Workload and scene
+motion make these snapshots unsuitable as a strict before/after benchmark,
+but they establish the practical limit: the smaller Meta analysis surface is
+a modest AIService optimization and does not remove the provider's expensive
+2048-by-1536 stream or reduce Kiosk Satellite's finger-count workload.
+`--restore-lightweight-presence` restores the saved analysis dimensions while
+retaining the other presence settings.
+
 Presence verification is unattended. AIService logs live analysis and
 region-of-interest frame delivery, and its shell-readable `CameraService` dump
 exposes both the loaded `AlohaFrameProcessor` and populated
