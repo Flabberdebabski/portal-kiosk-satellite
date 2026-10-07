@@ -162,6 +162,7 @@ class PortalProvisioner:
         self.attempts = attempts
         self.log_dir = log_dir
         self.audio = audio
+        self.audio_already_configured = False
         self.restore_audio = restore_audio
         self.device_owner = device_owner
         self.kiosk_home = kiosk_home
@@ -320,7 +321,7 @@ class PortalProvisioner:
         if self.target is None:
             raise ProvisionError("target must be selected before staging")
         files = [(self.target.preload_path(ROOT), PRELOAD_REMOTE)]
-        if self.audio:
+        if self.audio and not self.audio_already_configured:
             files.append((HELPER_LOCAL, HELPER_REMOTE))
         if self.remove_meta_accounts:
             files.append((ACCOUNT_CTL_LOCAL, ACCOUNT_CTL_REMOTE))
@@ -351,7 +352,7 @@ class PortalProvisioner:
             )
             self.adb_run(["shell", "chmod", mode, remote], timeout=5, check=True)
         staged = f"preload={PRELOAD_REMOTE}"
-        if self.audio:
+        if self.audio and not self.audio_already_configured:
             staged += f" helper={HELPER_REMOTE}"
         if self.remove_meta_accounts:
             staged += f" account_ctl={ACCOUNT_CTL_REMOTE}"
@@ -1654,6 +1655,22 @@ class PortalProvisioner:
         )
         return is_owner
 
+    def audio_preflight(self) -> bool:
+        marker = "/data/local/tmp/portal-audio-backup/installed-v1"
+        installed = self.adb_run(
+            ["shell", "test", "-f", marker], timeout=5
+        ).returncode == 0
+        if not installed:
+            print("AUDIO_PREFLIGHT installed=0 healthy=0 action=install")
+            return False
+        try:
+            self.verify_watchdog(wait_seconds=5)
+        except ProvisionError:
+            print("AUDIO_PREFLIGHT installed=1 healthy=0 action=repair")
+            return False
+        print("AUDIO_PREFLIGHT installed=1 healthy=1 action=skip")
+        return True
+
     def kaslr_base(self, tag: str) -> int:
         offsets = (
             0x3D7E,
@@ -1893,7 +1910,7 @@ class PortalProvisioner:
         }
         if self.persist_wireless_adb:
             environment["GHOSTLOCK_ENABLE_WIRELESS_ADB"] = "1"
-        if self.audio:
+        if self.audio and not self.audio_already_configured:
             environment.update(
                 {
                     "GHOSTLOCK_AUDIO_CTL": "1",
@@ -1983,7 +2000,7 @@ class PortalProvisioner:
                 "wireless ADB persistence install",
                 True,
             )
-        if self.audio:
+        if self.audio and not self.audio_already_configured:
             expected_markers.update(
                 {
                     "audio_parameters": (
@@ -3150,6 +3167,7 @@ class PortalProvisioner:
 
     def provision(self) -> None:
         self.connect(wait_seconds=30)
+        resumed_pending = False
         if self.status_only:
             self.verify_target(require_supported=False)
             self.print_status()
@@ -3161,6 +3179,7 @@ class PortalProvisioner:
             if not self.recover_actions():
                 return
             self.recover = False
+            resumed_pending = True
         if self.dry_run:
             self.verify_target(require_supported=False)
             status = self.print_status()
@@ -3171,6 +3190,16 @@ class PortalProvisioner:
         self.verify_target()
         if self.backup_path:
             self.create_backup_bundle(self.backup_path)
+        self.audio_already_configured = (
+            self.audio_preflight() if self.audio else False
+        )
+        if self.audio_already_configured and self.requested_actions() == {
+            "audio": True
+        }:
+            if resumed_pending:
+                self.write_state("complete")
+            print(f"PROVISION_ALREADY_COMPLETE actions=audio logs={self.log_dir}")
+            return
         self.write_state("pending")
         already_owner = self.device_owner_preflight() if self.device_owner else False
         already_meta_clean = (
@@ -3204,7 +3233,7 @@ class PortalProvisioner:
             )
 
         privileged_action = (
-            self.audio
+            (self.audio and not self.audio_already_configured)
             or self.restore_audio
             or self.disable_updates
             or self.enable_updates
@@ -3246,7 +3275,7 @@ class PortalProvisioner:
         if not self.skip_build:
             build(
                 target=self.target,
-                build_audio=self.audio,
+                build_audio=self.audio and not self.audio_already_configured,
                 build_account=self.remove_meta_accounts,
                 build_components=(
                     self.debloat

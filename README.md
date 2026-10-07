@@ -387,7 +387,11 @@ AIService and keeps these private DSP parameters at zero:
 The change is system-wide, so every Android application receives audio without
 those two processing stages. The watchdog reapplies the values after AIService
 starts and repairs later firmware-side changes. The provisioner confirms both
-readbacks on two boots.
+readbacks on two boots. A later `--audio` run first checks the persistent
+installation marker and the running watchdog. If both are healthy, an
+audio-only command exits successfully without rebuilding, exploiting, or
+rebooting; when combined with other actions, only the audio installation is
+skipped.
 
 Restore Meta's original AIService loader, remove the watchdog, and restore the
 firmware's AEC and NS parameter defaults with:
