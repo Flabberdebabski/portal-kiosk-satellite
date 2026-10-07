@@ -36,6 +36,10 @@ All changes are persistent and survive reboots.
 - **[Kiosk Satellite Device Owner provisioning](#2-make-kiosk-satellite-the-device-owner):**
   grants Android's strongest kiosk policy role so Kiosk Satellite can manage
   the device more reliably than an ordinary device-admin app.
+- **[Persistent Kiosk Satellite home screen](#use-kiosk-satellite-as-the-home-screen):**
+  makes Kiosk Satellite the Android HOME app so it starts at boot, receives
+  every Home press, and prevents Meta's obsolete account-error screen from
+  taking focus. Kiosk Satellite's crash-loop fuse provides automatic recovery.
 - **[Automatic firmware-update blocking](#3-disable-automatic-meta-firmware-updates):**
   keeps an abandoned Portal on its known compatible build and prevents an
   unexpected Meta update from breaking provisioning. The paired rollback
@@ -61,10 +65,6 @@ All changes are persistent and survive reboots.
   camera sensor and Kiosk Satellite's independent RTSP stream at their normal
   configured frame rates. A device-local helper reapplies the cap after every
   boot and then exits.
-- **[Lightweight camera mode](#lightweight-camera-mode):** combines the
-  full-scene profile and 2 FPS analysis cap with a smaller 640-by-480 Meta
-  analysis surface. This reduces Meta's analysis pixel count without changing
-  the full field of view or Kiosk Satellite's separate camera and RTSP streams.
 - **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
   installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
   manager and starts its service with Android's ADB-shell identity after every
@@ -138,7 +138,7 @@ the first exploit attempt succeeds.
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
   `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku` or
-  `--presence-fps-cap` (including `--lightweight-camera`)
+  `--presence-fps-cap`
 - Internet access to download the pinned official Shizuku APK, or a local APK
   supplied with `--shizuku-apk PATH`
 
@@ -328,12 +328,12 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
   --profile kiosk
 ```
 
-The `kiosk` profile expands to the audio, Device Owner, update blocking,
-debloat, Meta-account removal, presence optimization, and third-party app
-update actions. You may add `--privacy-dns HOSTNAME` when you operate a
-DNS-over-TLS filtering resolver, or `--shizuku` when apps on the Portal need
-Shizuku's shell-level APIs. Add `--lightweight-camera` for the tested
-full-scene, 2 FPS, 640-by-480 Meta presence configuration.
+The `kiosk` profile expands to the audio, Device Owner, Kiosk Satellite home,
+update blocking, debloat, Meta-account removal, presence optimization, and
+third-party app update actions. You may add `--privacy-dns HOSTNAME` when you
+operate a DNS-over-TLS filtering resolver, or `--shizuku` when apps on the
+Portal need Shizuku's shell-level APIs. Add `--presence-fps-cap 2` when reduced
+Meta analysis CPU use is more important than its default analysis cadence.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. For a stock Portal, also keep USB connected and follow the ADB
@@ -354,12 +354,12 @@ available rollback.
 | Persist wireless ADB across future boots | Automatic with root-backed actions | Yes | No |
 | Disable hardware audio processing | `--audio` | Yes | `--restore-audio` |
 | Make Kiosk Satellite Device Owner | `--device-owner` | Yes, on first setup | No |
+| Make Kiosk Satellite the persistent home screen | `--kiosk-home` | No; Device Owner required | `--restore-kiosk-home` |
 | Disable automatic firmware updates | `--disable-updates` | Yes | `--enable-updates` |
 | Disable unused Meta applications and cloud workers | `--debloat` | Yes | `--restore-bloat` |
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
-| Use the full lightweight camera preset | `--lightweight-camera` | Yes | `--restore-lightweight-camera` and the other presence rollback flags |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
 | Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
 | Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
@@ -418,6 +418,30 @@ only after checking that no other Device Owner exists. It saves the original
 policy state under `/data/local/tmp/portal-device-owner-backup` and verifies
 both DevicePolicyManager and `ro.device_owner=true` after reboot. There is no
 automated Device Owner removal action in the provisioner.
+
+### Use Kiosk Satellite as the home screen
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --kiosk-home
+```
+
+This uses Kiosk Satellite's Device Owner authority to register its
+disabled-by-default `HomeAlias` as Android's persistent HOME activity. Kiosk
+Satellite then starts directly after boot and receives every Home press. This
+also prevents Meta's `AlohaInvalidOwnerHomeActivity` from covering the kiosk
+after local Meta accounts are removed. Kiosk Satellite's built-in crash-loop
+fuse releases the HOME role automatically if the app repeatedly fails to
+start.
+
+Kiosk Satellite must already be Device Owner. The complete `--profile kiosk`
+applies the Device Owner record first and then configures HOME. Release the role
+and return to Android's remaining launcher resolution with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-kiosk-home
+```
 
 ### 3. Disable automatic Meta firmware updates
 
@@ -507,6 +531,11 @@ log directory. Tokens and full database contents are not backed up, so this
 action has no automated restore. Repeated runs are safe: once the accounts are
 gone and the authenticators are disabled, the tool only verifies the state.
 
+Removing the final Meta owner account can make Portal firmware select its
+obsolete invalid-owner HOME screen. Use `--kiosk-home` after Kiosk Satellite is
+Device Owner, or use `--profile kiosk`, to keep the account warning from taking
+focus.
+
 ### 6. Reduce AIService CPU use while preserving presence detection
 
 Run:
@@ -557,46 +586,6 @@ python3 tools/provision_portal.py \
 
 The installer and restore action use atomic file replacement, preserve the
 app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
-
-#### Lightweight camera mode
-
-For a smaller Meta analysis surface that retains the complete scene, run:
-
-```sh
-python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --lightweight-camera
-```
-
-This preset applies the full-scene presence profile, caps Meta's analysis
-callback at 2 FPS, and changes only AIService's private YUV analysis surface
-from 1024 by 768 to 640 by 480. It leaves AIService's 2048-by-1536 auxiliary
-camera surface in place because that stream is part of the firmware's camera
-session contract. The smaller analysis surface preserves the full field of
-view; it changes pixel count, not cropping.
-
-Kiosk Satellite opens the Portal's virtual camera as camera ID 0. That client,
-its gesture analysis, and its RTSP encoder remain separate from AIService's
-camera ID 1 analysis surface. On the tested Portal Go, simultaneous capture
-retained AIService's 640-by-480 analysis surface, its 1280-by-720 virtual-camera
-output, and Kiosk Satellite's requested 640-by-480 gesture inputs. The change
-therefore does not reduce the amount of work Kiosk Satellite performs for
-finger counting. It provides a modest reduction in Meta-side analysis work;
-the 2048-by-1536 auxiliary stream means it does not materially remove the
-camera provider's main load.
-
-The camera dimensions are stored as vendor persistent properties. The
-temporary-root installer sets them through the camera HAL security domain,
-saves the original effective dimensions, and verifies the actual AIService
-surface on two normal boots. Restore only the original Meta analysis
-resolution while keeping the full-scene profile and FPS cap with:
-
-```sh
-python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --restore-lightweight-camera
-```
-
-Use `--restore-presence-fps` and `--restore-presence-profile` as well when you
-want to remove the other two parts of the preset.
 
 #### Optional presence-analysis frame-rate cap
 

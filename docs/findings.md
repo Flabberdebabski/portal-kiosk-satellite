@@ -1757,41 +1757,30 @@ Portal, or a separately verified early-boot execution hook. Until one of
 those exists, the current provisioning exploit cannot safely make an 80%
 charge controller survive reboot, so no battery-limit option is exposed.
 
-157. Traced the relationship between AIService presence analysis and Kiosk
-Satellite's gesture camera. Meta's physical camera ID 1 normally creates a
-1024-by-768 YUV analysis surface, a 2048-by-1536 auxiliary surface, and a
-1280-by-720 private output consumed by the virtual-camera stack. Kiosk
-Satellite opens virtual camera ID 0 separately and requested two 640-by-480
-inputs while its finger-count feature was active. Reducing Meta's YUV surface
-therefore does not reduce Kiosk Satellite's own gesture-model input or frame
-rate.
+157. Tested the remaining route for lowering AIService camera cost: suppressing
+the 2048-by-1536 `RAW_PRIVATE` auxiliary stream while keeping its 640-by-480
+analysis stream. Runtime instrumentation of
+`X.0Kt.A09(Context)` confirmed that the auxiliary path is selected by
+`PackageManager.hasSystemFeature("portal.software.smart_camera")`. Returning
+false removed the auxiliary `ImageReader` exactly as expected. When Kiosk
+Satellite opened camera 0, however, the Qualcomm provider restarted, Camera2
+reported camera errors, and AIService stopped emitting `Notify people
+presence`. The lower CPU reading therefore represented a failed virtual-camera
+pipeline. The hook was removed and the canonical audio helper restored across
+two normal boots. The earlier 1024-by-768 to 640-by-480 analysis-surface change
+had no material CPU effect on its own, so `--lightweight-camera` was removed.
 
-AIService reads the analysis dimensions from
-`persist.camera.ml.surface.dim.w` and `persist.camera.ml.surface.dim.h`.
-Android labels these properties `camera_prop`: shell cannot read them and a
-root process in the ordinary su domain cannot set them. During the exploit's
-existing permissive interval, running `/system/bin/setprop` through
-`runcon u:r:hal_camera_default:s0` writes them successfully. A direct attempt
-to append the values to Android's serialized persistent-property file was
-rejected during the next boot and was not retained.
-
-The reversible `--lightweight-camera` action now applies the tested
-full-scene profile, selects 2 FPS unless another valid cap was supplied, saves
-the original effective analysis dimensions, and requests 640 by 480.
-Verification reads the actual active camera surface rather than relying on
-shell-inaccessible property values. It passed consecutive enforcing boots
-`92cbabe5-2a06-4dbb-b4d9-00b1eeca2ad9` and
-`0ed22c3f-c087-4fa4-af76-eda901eb6824` with full-scene analysis, live ROI and
-analysis frames, and populated pose metrics. With Kiosk Satellite active, the
-camera dump simultaneously showed the 2048-by-1536 auxiliary stream,
-640-by-480 Meta YUV analysis, 1280-by-720 private virtual output, and the
-application's independent 640-by-480 camera ID 0 inputs.
-
-Twelve live CPU samples with both camera clients active averaged 43.4% for
-AIService, 38.0% for Kiosk Satellite, 125.2% for the camera provider, 18.7%
-for cameraserver, and 8.4% for VirtualCameraManager. This was not a matched
-scene-controlled A/B test. It shows that the resolution change leaves the
-dominant 2048-by-1536 provider work intact and should be described as a modest
-Meta-side optimization. It does not lower Kiosk Satellite's finger-count CPU
-cost. `--restore-lightweight-camera` returns the Meta analysis surface to
-the saved dimensions without removing the full-scene or FPS settings.
+158. Removing the final local Meta owner account caused the launcher to enable
+`com.facebook.alohacommon.login.forcedrelogin.ui.AlohaInvalidOwnerHomeActivity`,
+disable its normal Home activity, and place an obsolete account-error screen in
+front of Kiosk Satellite. Kiosk Satellite already has a safer device-owner
+mechanism: its protected provisioning activity accepts `{"home.enabled":true}`
+from ADB, enables `.HomeAlias`, and calls
+`DevicePolicyManager.addPersistentPreferredActivity`. The new
+`--kiosk-home` action drives and verifies that path; `--restore-kiosk-home`
+releases it, and the complete kiosk profile enables it after Device Owner is
+loaded. HOME resolved to `me.jxl.kiosk_satellite/.HomeAlias` on verification
+boots `441ba1cc-e5fe-4f61-87ef-d97884b0354f` and
+`77394ed3-943a-4351-bdb2-e38e66d1506e`. The final boot retained both AIService
+streams, an active Kiosk Satellite camera client, and the audio watchdog with
+AEC and NS at zero.

@@ -55,6 +55,8 @@ SHIZUKU_APK_SHA256 = (
 STATE_REMOTE = "/data/local/tmp/portal-provision-state-v1.json"
 PRIVACY_BACKUP_REMOTE = "/data/local/tmp/portal-private-dns-before-v1.json"
 KIOSK_COMPONENT = "me.jxl.kiosk_satellite/.KioskAdminReceiver"
+KIOSK_HOME_COMPONENT = "me.jxl.kiosk_satellite/.HomeAlias"
+KIOSK_PROVISION_COMPONENT = "me.jxl.kiosk_satellite/.ProvisionActivity"
 KIOSK_OWNER_COMPONENTS = (
     "admin=me.jxl.kiosk_satellite/.KioskAdminReceiver",
     "admin=ComponentInfo{me.jxl.kiosk_satellite/"
@@ -112,8 +114,6 @@ PRESENCE_LOG_MARKER = "Notify people presence"
 PRESENCE_ANALYSIS_FRAME_MARKER = "Frame available for analysis stream"
 PRESENCE_ROI_FRAME_MARKER = "Frame available for roi stream"
 PRESENCE_WIDE_FRAME_MARKER = "Disabled hardware cropping"
-PRESENCE_LIGHTWEIGHT_WIDTH = 640
-PRESENCE_LIGHTWEIGHT_HEIGHT = 480
 CAMERA_SERVICE_COMPONENT = (
     "com.facebook.portal.aiservice/"
     "com.facebook.alohaapp.app.services.CameraService"
@@ -133,6 +133,8 @@ class PortalProvisioner:
         audio: bool = False,
         restore_audio: bool = False,
         device_owner: bool = False,
+        kiosk_home: bool = False,
+        restore_kiosk_home: bool = False,
         disable_updates: bool = False,
         enable_updates: bool = False,
         debloat: bool = False,
@@ -142,8 +144,6 @@ class PortalProvisioner:
         restore_presence_profile: bool = False,
         presence_fps_cap: int | None = None,
         restore_presence_fps: bool = False,
-        lightweight_camera: bool = False,
-        restore_lightweight_camera: bool = False,
         privacy_dns: str | None = None,
         restore_privacy_dns: bool = False,
         allow_app_updates: bool = False,
@@ -163,6 +163,8 @@ class PortalProvisioner:
         self.audio = audio
         self.restore_audio = restore_audio
         self.device_owner = device_owner
+        self.kiosk_home = kiosk_home
+        self.restore_kiosk_home = restore_kiosk_home
         self.disable_updates = disable_updates
         self.enable_updates = enable_updates
         self.debloat = debloat
@@ -172,8 +174,6 @@ class PortalProvisioner:
         self.restore_presence_profile = restore_presence_profile
         self.presence_fps_cap = presence_fps_cap
         self.restore_presence_fps = restore_presence_fps
-        self.lightweight_camera = lightweight_camera
-        self.restore_lightweight_camera = restore_lightweight_camera
         self.privacy_dns = privacy_dns
         self.restore_privacy_dns = restore_privacy_dns
         self.allow_app_updates = allow_app_updates
@@ -368,6 +368,8 @@ class PortalProvisioner:
             "audio",
             "restore_audio",
             "device_owner",
+            "kiosk_home",
+            "restore_kiosk_home",
             "disable_updates",
             "enable_updates",
             "debloat",
@@ -376,8 +378,6 @@ class PortalProvisioner:
             "optimize_presence",
             "restore_presence_profile",
             "restore_presence_fps",
-            "lightweight_camera",
-            "restore_lightweight_camera",
             "restore_privacy_dns",
             "allow_app_updates",
             "restore_app_verifier",
@@ -391,15 +391,6 @@ class PortalProvisioner:
         if self.presence_fps_cap is not None:
             actions["presence_fps_cap"] = self.presence_fps_cap
         return actions
-
-    def current_presence_analysis_resolution(self) -> tuple[str, str]:
-        camera = self.adb_run(
-            ["shell", "dumpsys", "media.camera"], timeout=20, check=True
-        ).stdout
-        match = re.search(r"ImageReader-(\d+)x(\d+)f23m3-", camera)
-        if match is None:
-            raise ProvisionError("AIService analysis surface is absent")
-        return match.group(1), match.group(2)
 
     def tool_revision(self) -> str:
         result = self.run(
@@ -521,6 +512,7 @@ class PortalProvisioner:
             marker in policy for marker in KIOSK_OWNER_COMPONENTS
         )
         kiosk_dump = shell("dumpsys", "package", "me.jxl.kiosk_satellite")
+        default_home = self.current_default_home()
         version_name = re.search(r"\bversionName=([^\s]+)", kiosk_dump)
         version_code = re.search(r"\bversionCode=(\d+)", kiosk_dump)
         logs = shell("logcat", "-d", "-v", "brief", timeout=20)
@@ -574,15 +566,6 @@ class PortalProvisioner:
         presence_fps_value = shell(
             "cat", "/data/local/tmp/portal-presence-backup/fps-cap-v1", timeout=5
         )
-        analysis_resolution_match = re.search(
-            r"ImageReader-(\d+)x(\d+)f23m3-", camera
-        )
-        lightweight_camera_installed = exists(
-            "/data/local/tmp/portal-presence-backup/lightweight-installed-v1"
-        )
-        lightweight_camera_restored = exists(
-            "/data/local/tmp/portal-presence-backup/lightweight-restored-v1"
-        )
         applied_fps_match = re.search(
             r"Setting AI Processing FPS\s+([0-9]+(?:\.[0-9]+)?)", logs
         )
@@ -629,6 +612,8 @@ class PortalProvisioner:
                 "version_code": int(version_code.group(1)) if version_code else None,
                 "admin_active": f"    {KIOSK_COMPONENT}:" in policy,
                 "device_owner": owner,
+                "default_home": default_home or None,
+                "home_screen": default_home == KIOSK_HOME_COMPONENT,
             },
             "audio": {
                 "state": (
@@ -743,13 +728,6 @@ class PortalProvisioner:
                 "analysis_fps_helper_key_authorized": exists(
                     PRESENCE_SAVED_KEY_REMOTE
                 ),
-                "analysis_resolution": (
-                    "x".join(analysis_resolution_match.groups())
-                    if analysis_resolution_match
-                    else None
-                ),
-                "lightweight_camera_installed": lightweight_camera_installed,
-                "lightweight_camera_restored": lightweight_camera_restored,
                 "profile_keys_loaded": profile_keys,
                 "full_scene_profile": (
                     PRESENCE_WIDE_FRAME_MARKER in logs
@@ -819,8 +797,6 @@ class PortalProvisioner:
                 self.restore_presence_profile,
                 self.presence_fps_cap is not None,
                 self.restore_presence_fps,
-                self.lightweight_camera,
-                self.restore_lightweight_camera,
                 self.shizuku,
                 self.remove_shizuku,
             )
@@ -841,6 +817,9 @@ class PortalProvisioner:
             "audio": audio.get("state") if isinstance(audio, dict) else None,
             "device_owner": (
                 kiosk.get("device_owner") if isinstance(kiosk, dict) else None
+            ),
+            "kiosk_home": (
+                kiosk.get("home_screen") if isinstance(kiosk, dict) else None
             ),
             "updates": updates.get("state") if isinstance(updates, dict) else None,
             "debloat": debloat.get("complete") if isinstance(debloat, dict) else None,
@@ -1483,6 +1462,8 @@ class PortalProvisioner:
             "audio",
             "restore_audio",
             "device_owner",
+            "kiosk_home",
+            "restore_kiosk_home",
             "disable_updates",
             "enable_updates",
             "debloat",
@@ -1492,12 +1473,6 @@ class PortalProvisioner:
             "restore_presence_profile",
             "presence_fps_cap",
             "restore_presence_fps",
-            "lightweight_camera",
-            "restore_lightweight_camera",
-            # Compatibility with pending manifests written before the public
-            # option was renamed to --lightweight-camera.
-            "lightweight_presence",
-            "restore_lightweight_presence",
             "privacy_dns",
             "restore_privacy_dns",
             "allow_app_updates",
@@ -1517,11 +1492,7 @@ class PortalProvisioner:
                     raise ProvisionError("invalid presence_fps_cap recovery value")
                 self.presence_fps_cap = value
             elif value is True:
-                legacy_names = {
-                    "lightweight_presence": "lightweight_camera",
-                    "restore_lightweight_presence": "restore_lightweight_camera",
-                }
-                setattr(self, legacy_names.get(name, name), True)
+                setattr(self, name, True)
             else:
                 raise ProvisionError(f"invalid recovery value for {name}: {value!r}")
         print("RECOVER_RESUME actions=" + ",".join(sorted(actions)))
@@ -1889,17 +1860,6 @@ class PortalProvisioner:
         if self.restore_presence_fps:
             environment["GHOSTLOCK_RESTORE_PRESENCE_FPS"] = "1"
             environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
-        if self.lightweight_camera:
-            old_width, old_height = self.current_presence_analysis_resolution()
-            environment.update(
-                {
-                    "GHOSTLOCK_LIGHTWEIGHT_PRESENCE": "1",
-                    "GHOSTLOCK_PRESENCE_OLD_WIDTH": old_width,
-                    "GHOSTLOCK_PRESENCE_OLD_HEIGHT": old_height,
-                }
-            )
-        if self.restore_lightweight_camera:
-            environment["GHOSTLOCK_RESTORE_LIGHTWEIGHT_PRESENCE"] = "1"
         if self.restore_presence_profile:
             environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
         if (
@@ -2005,16 +1965,6 @@ class PortalProvisioner:
         if self.restore_presence_fps:
             expected_markers["presence_fps_restore"] = (
                 "PORTAL_PRESENCE_FPS action=restore",
-                True,
-            )
-        if self.lightweight_camera:
-            expected_markers["lightweight_camera"] = (
-                "lightweight presence install",
-                True,
-            )
-        if self.restore_lightweight_camera:
-            expected_markers["lightweight_camera_restore"] = (
-                "lightweight presence restore",
                 True,
             )
         if self.restore_presence_profile:
@@ -2198,6 +2148,106 @@ class PortalProvisioner:
         print(
             f"DEVICE_OWNER_OK component={component} user=0 "
             f"ro.device_owner={owner_property}"
+        )
+
+    def current_default_home(self) -> str:
+        result = self.adb_run(
+            [
+                "shell",
+                "cmd",
+                "package",
+                "resolve-activity",
+                "--brief",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.HOME",
+            ],
+            timeout=10,
+            check=True,
+        )
+        components = [
+            line.strip()
+            for line in result.stdout.splitlines()
+            if "/" in line and not line.lstrip().startswith("priority=")
+        ]
+        return components[-1] if components else ""
+
+    def kiosk_home_alias_enabled(self) -> bool:
+        package = self.adb_run(
+            ["shell", "dumpsys", "package", "me.jxl.kiosk_satellite"],
+            timeout=15,
+            check=True,
+        ).stdout
+        enabled = re.search(
+            r"enabledComponents:\s*(.*?)(?:disabledComponents:|"
+            r"isSystemUserPackagesBlacklistSupported:|\Z)",
+            package,
+            re.DOTALL,
+        )
+        return (
+            enabled is not None
+            and "me.jxl.kiosk_satellite.HomeAlias" in enabled.group(1)
+        )
+
+    def configure_kiosk_home(self, enabled: bool) -> None:
+        if enabled:
+            self.verify_device_owner()
+        payload = shlex.quote(
+            json.dumps({"home.enabled": enabled}, separators=(",", ":"))
+        )
+        result = self.adb_run(
+            [
+                "shell",
+                "am",
+                "start",
+                "-W",
+                "-n",
+                KIOSK_PROVISION_COMPONENT,
+                "--es",
+                "ks.provision",
+                payload,
+            ],
+            timeout=30,
+        )
+        if result.returncode != 0:
+            raise ProvisionError(
+                "Kiosk Satellite rejected the home-screen setting:\n"
+                + result.stdout[-2000:]
+            )
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            held = self.current_default_home() == KIOSK_HOME_COMPONENT
+            alias_enabled = self.kiosk_home_alias_enabled()
+            if (enabled and held and alias_enabled) or (
+                not enabled and not held and not alias_enabled
+            ):
+                print(
+                    "KIOSK_HOME_CONFIGURED "
+                    f"enabled={int(enabled)} default={self.current_default_home() or 'none'}"
+                )
+                return
+            time.sleep(1)
+        raise ProvisionError(
+            "Kiosk Satellite did not apply the requested home-screen setting"
+        )
+
+    def verify_kiosk_home(self, enabled: bool) -> None:
+        default_home = self.current_default_home()
+        alias_enabled = self.kiosk_home_alias_enabled()
+        if enabled and (default_home != KIOSK_HOME_COMPONENT or not alias_enabled):
+            raise ProvisionError(
+                "Kiosk Satellite is not the persistent home screen: "
+                f"default={default_home!r} alias_enabled={int(alias_enabled)}"
+            )
+        if not enabled and (default_home == KIOSK_HOME_COMPONENT or alias_enabled):
+            raise ProvisionError(
+                "Kiosk Satellite remains registered as the home screen: "
+                f"default={default_home!r} alias_enabled={int(alias_enabled)}"
+            )
+        print(
+            "KIOSK_HOME_OK "
+            f"enabled={int(enabled)} default={default_home or 'none'}"
         )
 
     def disable_ota_packages(self) -> None:
@@ -2932,61 +2982,6 @@ class PortalProvisioner:
             f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
         )
 
-    def verify_lightweight_camera(self, restored: bool = False) -> None:
-        width, height = self.current_presence_analysis_resolution()
-        if restored:
-            backup = self.adb_run(
-                [
-                    "shell",
-                    "cat",
-                    "/data/local/tmp/portal-presence-backup/"
-                    "analysis-resolution-before-v1",
-                ],
-                timeout=5,
-                check=True,
-            ).stdout
-            match = re.fullmatch(
-                r"width=(absent|\d+)\nheight=(absent|\d+)\n", backup
-            )
-            if match is None:
-                raise ProvisionError("invalid presence-resolution backup")
-            expected_width = "1024" if match.group(1) == "absent" else match.group(1)
-            expected_height = "768" if match.group(2) == "absent" else match.group(2)
-            if (width, height) != (expected_width, expected_height):
-                raise ProvisionError(
-                    "presence analysis resolution was not restored: "
-                    f"actual={width}x{height} "
-                    f"expected={expected_width}x{expected_height}"
-                )
-            print(
-                "LIGHTWEIGHT_PRESENCE_RESTORE_OK "
-                f"resolution={width}x{height}"
-            )
-            return
-
-        expected = (
-            str(PRESENCE_LIGHTWEIGHT_WIDTH),
-            str(PRESENCE_LIGHTWEIGHT_HEIGHT),
-        )
-        if (width, height) != expected:
-            raise ProvisionError(
-                "lightweight presence surface did not persist: "
-                f"actual={width}x{height} "
-                f"expected={expected[0]}x{expected[1]}"
-            )
-        camera = self.adb_run(
-            ["shell", "dumpsys", "media.camera"], timeout=20, check=True
-        ).stdout
-        virtual_active = "Client Package Name: me.jxl.kiosk_satellite" in camera
-        if virtual_active and "Dims: 1280 x 720, format 0x7fa30c06" not in camera:
-            raise ProvisionError(
-                "the independent Kiosk Satellite virtual-camera surface is absent"
-            )
-        print(
-            "LIGHTWEIGHT_PRESENCE_OK analysis=640x480 "
-            f"virtual_camera={'1280x720' if virtual_active else 'dormant'}"
-        )
-
     def verify_meta_accounts_removed(self) -> None:
         accounts = self.meta_accounts()
         if accounts:
@@ -3035,6 +3030,10 @@ class PortalProvisioner:
             self.verify_audio_restored()
         if self.device_owner:
             self.verify_device_owner()
+        if self.kiosk_home:
+            self.verify_kiosk_home(enabled=True)
+        if self.restore_kiosk_home:
+            self.verify_kiosk_home(enabled=False)
         if self.disable_updates:
             self.disable_ota_packages()
             self.verify_ota_block()
@@ -3050,7 +3049,6 @@ class PortalProvisioner:
             self.optimize_presence
             or self.presence_fps_cap is not None
             or self.restore_presence_fps
-            or self.lightweight_camera
         ):
             self.verify_presence_runtime(
                 require_profile=True,
@@ -3058,10 +3056,6 @@ class PortalProvisioner:
             )
         if self.restore_presence_profile:
             self.verify_presence_runtime(require_profile=False)
-        if self.lightweight_camera:
-            self.verify_lightweight_camera()
-        if self.restore_lightweight_camera:
-            self.verify_lightweight_camera(restored=True)
         if self.privacy_dns or self.restore_privacy_dns:
             self.verify_privacy_dns()
         if self.allow_app_updates or self.restore_app_verifier:
@@ -3088,23 +3082,6 @@ class PortalProvisioner:
             f"logs={self.log_dir}"
         )
 
-    def completed_lightweight_recovery_stage(self) -> bool:
-        if not self.lightweight_camera:
-            return False
-        allowed = {"lightweight_camera", "optimize_presence", "presence_fps_cap"}
-        if not set(self.requested_actions()).issubset(allowed):
-            return False
-        markers = (
-            "/data/local/tmp/portal-presence-backup/installed-v1",
-            "/data/local/tmp/portal-presence-backup/fps-cap-v1",
-            "/data/local/tmp/portal-presence-backup/lightweight-installed-v1",
-        )
-        return all(
-            self.adb_run(["shell", "test", "-f", marker], timeout=5).returncode
-            == 0
-            for marker in markers
-        )
-
     def provision(self) -> None:
         self.connect(wait_seconds=30)
         if self.status_only:
@@ -3118,18 +3095,6 @@ class PortalProvisioner:
             if not self.recover_actions():
                 return
             self.recover = False
-            if self.completed_lightweight_recovery_stage():
-                boot_id = self.adb_run(
-                    ["shell", "cat", "/proc/sys/kernel/random/boot_id"],
-                    timeout=5,
-                    check=True,
-                ).stdout.strip()
-                print(
-                    "RECOVER_VERIFY installed_stage=lightweight_camera "
-                    f"boot_id={boot_id}"
-                )
-                self.verify_across_two_reboots(first_boot=boot_id)
-                return
         if self.dry_run:
             self.verify_target(require_supported=False)
             status = self.print_status()
@@ -3183,14 +3148,16 @@ class PortalProvisioner:
             or self.restore_presence_profile
             or self.presence_fps_cap is not None
             or self.restore_presence_fps
-            or self.lightweight_camera
-            or self.restore_lightweight_camera
             or (self.device_owner and not already_owner)
             or (self.remove_meta_accounts and not already_meta_clean)
             or self.shizuku
             or self.remove_shizuku
         )
         if not privileged_action:
+            if self.kiosk_home:
+                self.configure_kiosk_home(enabled=True)
+            if self.restore_kiosk_home:
+                self.configure_kiosk_home(enabled=False)
             self.verify_across_two_reboots()
             return
 
@@ -3267,6 +3234,10 @@ class PortalProvisioner:
                 self.uninstall_shizuku_payload()
             if self.presence_fps_cap is not None:
                 self.activate_presence_helper()
+            if self.kiosk_home:
+                self.configure_kiosk_home(enabled=True)
+            if self.restore_kiosk_home:
+                self.configure_kiosk_home(enabled=False)
             self.verify_across_two_reboots(first_boot=post_attempt_boot)
             return
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
@@ -3336,6 +3307,20 @@ def parse_args() -> argparse.Namespace:
             "install Kiosk Satellite as Device Owner and verify it "
             "across both reboots"
         ),
+    )
+    kiosk_home_group = parser.add_mutually_exclusive_group()
+    kiosk_home_group.add_argument(
+        "--kiosk-home",
+        action="store_true",
+        help=(
+            "make Kiosk Satellite the persistent HOME app through its Device "
+            "Owner API, preventing Meta's invalid-account home from taking focus"
+        ),
+    )
+    kiosk_home_group.add_argument(
+        "--restore-kiosk-home",
+        action="store_true",
+        help="release Kiosk Satellite's HOME role and restore Android home resolution",
     )
     parser.add_argument(
         "--skip-build", action="store_true", help="use existing build outputs"
@@ -3426,17 +3411,6 @@ def parse_args() -> argparse.Namespace:
             "AIService's analysis and pose pipeline to remain live"
         ),
     )
-    presence_group.add_argument(
-        "--lightweight-camera",
-        "--lightweight-presence",
-        dest="lightweight_camera",
-        action="store_true",
-        help=(
-            "apply the full-scene presence profile, cap Meta analysis at "
-            "2 FPS, and reduce only its private analysis surface to 640x480; "
-            "Kiosk Satellite's virtual camera and RTSP resolution are unchanged"
-        ),
-    )
     parser.add_argument(
         "--presence-fps-cap",
         type=int,
@@ -3491,16 +3465,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     presence_group.add_argument(
-        "--restore-lightweight-camera",
-        "--restore-lightweight-presence",
-        dest="restore_lightweight_camera",
-        action="store_true",
-        help=(
-            "restore the AIService analysis resolution saved by "
-            "--lightweight-camera while retaining other presence settings"
-        ),
-    )
-    presence_group.add_argument(
         "--restore-presence-fps",
         action="store_true",
         help=(
@@ -3528,23 +3492,16 @@ def parse_args() -> argparse.Namespace:
         # The activation activity also applies Meta's other camera toggles.
         # Always pair the cap with the tested full-scene presence profile.
         args.optimize_presence = True
-    if args.lightweight_camera:
-        args.optimize_presence = True
-        if args.presence_fps_cap is None:
-            args.presence_fps_cap = 2
     if args.profile == "kiosk":
         conflicting = [
             flag
             for enabled, flag in (
                 (args.restore_audio, "--restore-audio"),
+                (args.restore_kiosk_home, "--restore-kiosk-home"),
                 (args.enable_updates, "--enable-updates"),
                 (args.restore_bloat, "--restore-bloat"),
                 (args.restore_presence_profile, "--restore-presence-profile"),
                 (args.restore_presence_fps, "--restore-presence-fps"),
-                (
-                    args.restore_lightweight_camera,
-                    "--restore-lightweight-camera",
-                ),
                 (args.restore_app_verifier, "--restore-app-verifier"),
             )
             if enabled
@@ -3556,6 +3513,7 @@ def parse_args() -> argparse.Namespace:
             )
         args.audio = True
         args.device_owner = True
+        args.kiosk_home = True
         args.disable_updates = True
         args.debloat = True
         args.remove_meta_accounts = True
@@ -3566,6 +3524,8 @@ def parse_args() -> argparse.Namespace:
             args.audio,
             args.restore_audio,
             args.device_owner,
+            args.kiosk_home,
+            args.restore_kiosk_home,
             args.disable_updates,
             args.enable_updates,
             args.debloat,
@@ -3575,8 +3535,6 @@ def parse_args() -> argparse.Namespace:
             args.restore_presence_profile,
             args.presence_fps_cap is not None,
             args.restore_presence_fps,
-            args.lightweight_camera,
-            args.restore_lightweight_camera,
             args.privacy_dns,
             args.restore_privacy_dns,
             args.allow_app_updates,
@@ -3616,6 +3574,8 @@ def main() -> int:
             audio=args.audio,
             restore_audio=args.restore_audio,
             device_owner=args.device_owner,
+            kiosk_home=args.kiosk_home,
+            restore_kiosk_home=args.restore_kiosk_home,
             disable_updates=args.disable_updates,
             enable_updates=args.enable_updates,
             debloat=args.debloat,
@@ -3625,8 +3585,6 @@ def main() -> int:
             restore_presence_profile=args.restore_presence_profile,
             presence_fps_cap=args.presence_fps_cap,
             restore_presence_fps=args.restore_presence_fps,
-            lightweight_camera=args.lightweight_camera,
-            restore_lightweight_camera=args.restore_lightweight_camera,
             privacy_dns=args.privacy_dns,
             restore_privacy_dns=args.restore_privacy_dns,
             allow_app_updates=args.allow_app_updates,
