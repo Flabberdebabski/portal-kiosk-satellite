@@ -108,9 +108,12 @@ The project adapts GhostLock,
 [CVE-2026-43499](https://www.cve.org/CVERecord?id=CVE-2026-43499), to a
 specific Portal kernel. The host provisioner confirms the device model and full
 firmware fingerprint, reboots into a clean state, derives the randomized kernel
-addresses for that boot, and starts the exploit through a staged native
-library. The exploit obtains temporary kernel read/write access, gives its own
-process root credentials, and performs only the selected provisioning actions.
+addresses for that boot, and installs a tiny temporary debuggable package used
+as the exploit's Android scheduler waiter. The provisioner verifies `run-as`
+before the first reboot, starts the exploit through a staged native library,
+and removes the temporary package when the attempt sequence finishes. The
+exploit obtains temporary kernel read/write access, gives its own process root
+credentials, and performs only the selected provisioning actions.
 
 Afterward, the device reboots normally. SELinux returns to enforcing, and the
 exploit does not install `su`, a root shell, or a general root daemon. Features
@@ -137,8 +140,8 @@ the first exploit attempt succeeds.
 - Android NDK r28.2 (`28.2.13676358`)
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
-  `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku` or
-  `--presence-fps-cap`
+  `aapt`, `zipalign`, and `apksigner`; `d8` is also required by actions that
+  build Java helpers, including `--shizuku` and `--presence-fps-cap`
 - Internet access to download the pinned official Shizuku APK, or a local APK
   supplied with `--shizuku-apk PATH`
 
@@ -802,7 +805,11 @@ unresponsive, power-cycle it, restore USB and wireless ADB, and rerun the same
 command; completed provisioning actions are designed to be repeatable.
 
 Use `--skip-build` only when the required outputs have already been built and
-have not changed. Display every available option with:
+have not changed. Every root-backed action requires both the selected exploit
+library and `exploit-sentinel/build/portal-exploit-sentinel.apk`. The
+provisioner installs that no-permission package temporarily, confirms that
+`run-as` accepts it, and removes it automatically. Display every available
+option with:
 
 ```sh
 python3 tools/provision_portal.py --help
@@ -818,6 +825,8 @@ failure.
   exact-build target definitions
 - `helper/`: persistent native audio watchdog and the earlier helper APK
 - `shizuku-helper/`: device-local loopback-ADB launcher for Shizuku
+- `exploit-sentinel/`: temporary no-permission debuggable package used by the
+  GhostLock scheduler trigger
 - `tools/provision_portal.py`: user-facing build, installation, retry, and
   two-reboot verification tool
 - `tools/portal_targets.py`: exact model and firmware registry used before any

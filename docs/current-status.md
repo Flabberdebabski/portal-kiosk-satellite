@@ -19,6 +19,20 @@ The current boot's randomized `_text` is recovered with Android's bundled
 `el0_svc_naked+0x34`; subtracting `0x3d7e` gives the runtime kernel base passed
 through `GHOSTLOCK_KASLR_BASE`.
 
+Privileged provisioning is self-contained on a factory-reset device. Before
+the first clean reboot, the host installs the no-permission debuggable package
+`dev.portal.exploitsentinel`, verifies its `run-as` path, and passes that exact
+package to the `proc_uid` priority-inheritance trigger. The package is removed
+after a successful attempt sequence and by best-effort cleanup after failure.
+The earlier hard-coded `me.jxl.portalreadprobe` dependency was a development
+artifact and has been removed.
+
+CPU affinity setup now snapshots Android's original allowed CPU mask before
+the exploit narrows any thread. A requested CPU that is offline or excluded by
+the device cpuset falls back to that original mask. This keeps the optional
+watcher schedulable on Portal configurations that do not expose CPU 7 and
+avoids terminating the exploit on `sched_setaffinity(...): EINVAL`.
+
 Meta's installed Binder stubs establish the exact private audio protocol:
 
 - Service manager: `com.facebook.IAudioServiceManager`

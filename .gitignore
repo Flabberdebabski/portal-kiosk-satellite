@@ -6,6 +6,7 @@ helper/build/*
 shizuku-helper/build/*
 !shizuku-helper/build/.gitkeep
 presence-helper/build/*
+exploit-sentinel/build/*
 exploit/portal-terry-*
 *.o
 *.so

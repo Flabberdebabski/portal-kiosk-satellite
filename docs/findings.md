@@ -1893,3 +1893,23 @@ The device was not placed in EDL. Current conclusion: the supported GhostLock
 route provides temporary Android kernel privilege sufficient for guarded
 data-partition provisioning, but no verified bootloader/AVB unlock path is
 currently available.
+
+162. Investigated a factory-reset Portal Go provisioning failure reported in
+issue 3. The production environment enabled the real `proc_uid` app sentinel
+without naming its package, so `slide.c` fell back to the developer-only
+`me.jxl.portalreadprobe` test APK. On a clean device, `run-as` rejected that
+unknown package and the priority-inheritance sentinel could not block. The
+provisioner now builds and installs its own no-permission debuggable
+`dev.portal.exploitsentinel` package, verifies `run-as` before reboot, passes
+the package name explicitly, and removes it after the exploit sequence. A live
+Portal test installed the signed manifest-only APK, ran `/system/bin/id`
+through `run-as` in the `runas_app` SELinux domain, confirmed the package's
+`DEBUGGABLE` flag, and uninstalled it successfully.
+
+The same report exposed `sched_setaffinity(...): Invalid argument` before the
+slide route completed. The watcher requested logical CPU 7 even when Android's
+allowed mask did not contain it, and the shared `SYSCHK` wrapper made that a
+fatal process exit. Affinity handling now captures the original allowed mask
+once, preserves exact pins for available CPUs, falls back to the original mask
+for unavailable observer targets, and restores that saved mask instead of an
+invalid all-CPU bitset. The arm64 preload rebuilt cleanly with this change.

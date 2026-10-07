@@ -35,6 +35,10 @@ COMPONENT_CTL_LOCAL = ROOT / "exploit/build/portal-component-ctl.jar"
 COMPONENT_CTL_REMOTE = "/data/local/tmp/portal-component-ctl.jar"
 PRESENCE_HELPER_PACKAGE = "dev.portal.presencehelper"
 PRESENCE_HELPER_LOCAL = ROOT / "presence-helper/build/portal-presence-helper.apk"
+EXPLOIT_SENTINEL_PACKAGE = "dev.portal.exploitsentinel"
+EXPLOIT_SENTINEL_LOCAL = (
+    ROOT / "exploit-sentinel/build/portal-exploit-sentinel.apk"
+)
 PRESENCE_KEY_REMOTE = "/data/local/tmp/portal-presence-adbkey.pub"
 PRESENCE_SAVED_KEY_REMOTE = "/data/local/tmp/portal-presence-adbkey-v1.pub"
 SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
@@ -412,6 +416,8 @@ class PortalProvisioner:
         candidates = [pathlib.Path(__file__).resolve(), ROOT / "tools/portal_targets.py"]
         if self.target:
             candidates.append(self.target.preload_path(ROOT))
+        if self.privileged_requested():
+            candidates.append(EXPLOIT_SENTINEL_LOCAL)
         if self.audio:
             candidates.append(HELPER_LOCAL)
         if self.remove_meta_accounts:
@@ -839,6 +845,8 @@ class PortalProvisioner:
         required_outputs = []
         if self.target:
             required_outputs.append(str(self.target.preload_path(ROOT)))
+        if self.privileged_requested():
+            required_outputs.append(str(EXPLOIT_SENTINEL_LOCAL))
         if self.audio:
             required_outputs.append(str(HELPER_LOCAL))
         if self.remove_meta_accounts:
@@ -1851,6 +1859,67 @@ class PortalProvisioner:
             )
         print(f"PRESENCE_HELPER_REMOVE package={PRESENCE_HELPER_PACKAGE}")
 
+    def prepare_exploit_sentinel(self) -> None:
+        if not EXPLOIT_SENTINEL_LOCAL.is_file():
+            raise ProvisionError(
+                f"missing exploit sentinel build output: {EXPLOIT_SENTINEL_LOCAL}"
+            )
+        try:
+            self.install_apk_preserving_verifier(
+                EXPLOIT_SENTINEL_LOCAL, "exploit-sentinel"
+            )
+            self.settle_package_state()
+            result = self.adb_run(
+                [
+                    "shell",
+                    "run-as",
+                    EXPLOIT_SENTINEL_PACKAGE,
+                    "/system/bin/true",
+                ],
+                timeout=15,
+            )
+            if result.returncode != 0:
+                raise ProvisionError(
+                    "exploit sentinel run-as preflight failed: "
+                    + result.stdout.strip()
+                )
+            self.verify_package_verifier_state()
+        except ProvisionError:
+            self.uninstall_exploit_sentinel(best_effort=True)
+            raise
+        print(
+            f"EXPLOIT_SENTINEL_OK package={EXPLOIT_SENTINEL_PACKAGE} "
+            "run_as=verified"
+        )
+
+    def uninstall_exploit_sentinel(self, best_effort: bool = False) -> None:
+        try:
+            path = self.adb_run(
+                ["shell", "pm", "path", EXPLOIT_SENTINEL_PACKAGE], timeout=15
+            )
+            if path.returncode != 0 or not path.stdout.startswith("package:"):
+                print(
+                    f"EXPLOIT_SENTINEL_REMOVE package={EXPLOIT_SENTINEL_PACKAGE} "
+                    "already_absent=1"
+                )
+                return
+            result = self.adb_run(
+                ["uninstall", EXPLOIT_SENTINEL_PACKAGE], timeout=30
+            )
+            if result.returncode != 0 or "Success" not in result.stdout:
+                raise ProvisionError(
+                    "failed to remove exploit sentinel: "
+                    + result.stdout.strip()
+                )
+            print(
+                f"EXPLOIT_SENTINEL_REMOVE package={EXPLOIT_SENTINEL_PACKAGE} "
+                "already_absent=0"
+            )
+        except ProvisionError as exc:
+            if not best_effort:
+                raise
+            print(f"EXPLOIT_SENTINEL_REMOVE_DEFERRED error={exc}")
+
     def memstart(self, tag: str) -> int:
         result = self.adb_run(["shell", "bugreportz", "-p"], timeout=180)
         match = re.search(r"OK:(\S+\.zip)", result.stdout)
@@ -1898,6 +1967,7 @@ class PortalProvisioner:
             "GHOSTLOCK_SENDMMSG_PROC_UID_LOCK": "1",
             "GHOSTLOCK_PROC_UID_APP_SENTINEL": "1",
             "GHOSTLOCK_PROC_UID_RUNAS_SENTINEL": "1",
+            "GHOSTLOCK_PROC_UID_RUNAS_PACKAGE": EXPLOIT_SENTINEL_PACKAGE,
             "GHOSTLOCK_SLIDE_BREAK_OWNER_CHAIN": "1",
             "GHOSTLOCK_HOLD_AFTER_SCHED": "1",
             "GHOSTLOCK_MAIN_ROUTE": "slide-sendmmsg",
@@ -3286,6 +3356,7 @@ class PortalProvisioner:
                 ),
                 build_shizuku=self.shizuku,
                 build_presence=self.presence_fps_cap is not None,
+                build_sentinel=True,
             )
         if self.shizuku:
             self.install_shizuku_payload()
@@ -3293,48 +3364,56 @@ class PortalProvisioner:
             self.prepare_presence_helper()
         if self.restore_presence_fps or self.restore_presence_profile:
             self.uninstall_presence_helper()
-        self.stage()
-        clean_boot_id: str | None = None
-        for attempt in range(1, self.attempts + 1):
-            if clean_boot_id is None:
-                print(f"INSTALL_ATTEMPT={attempt} preparing clean boot", flush=True)
-                _, boot_id = self.reboot()
-            else:
-                boot_id = clean_boot_id
-                clean_boot_id = None
+        self.prepare_exploit_sentinel()
+        sentinel_removed = False
+        try:
+            self.stage()
+            clean_boot_id: str | None = None
+            for attempt in range(1, self.attempts + 1):
+                if clean_boot_id is None:
+                    print(f"INSTALL_ATTEMPT={attempt} preparing clean boot", flush=True)
+                    _, boot_id = self.reboot()
+                else:
+                    boot_id = clean_boot_id
+                    clean_boot_id = None
+                    print(
+                        f"INSTALL_ATTEMPT={attempt} using post-attempt clean boot "
+                        f"boot_id={boot_id}",
+                        flush=True,
+                    )
+                try:
+                    base = self.kaslr_base(str(attempt))
+                    memstart = self.memstart(str(attempt))
+                except ProvisionError as exc:
+                    print(f"ADDRESS_DISCOVERY_RETRY attempt={attempt} error={exc}")
+                    continue
                 print(
-                    f"INSTALL_ATTEMPT={attempt} using post-attempt clean boot "
-                    f"boot_id={boot_id}",
+                    f"RUNTIME_ADDRESSES attempt={attempt} boot_id={boot_id} "
+                    f"kaslr={base:#x} memstart={memstart:#x}",
                     flush=True,
                 )
-            try:
-                base = self.kaslr_base(str(attempt))
-                memstart = self.memstart(str(attempt))
-            except ProvisionError as exc:
-                print(f"ADDRESS_DISCOVERY_RETRY attempt={attempt} error={exc}")
-                continue
-            print(
-                f"RUNTIME_ADDRESSES attempt={attempt} boot_id={boot_id} "
-                f"kaslr={base:#x} memstart={memstart:#x}",
-                flush=True,
-            )
-            exploit_ok = self.exploit(base, memstart, attempt)
-            post_attempt_boot = self.connect_after_reboot(boot_id)
-            if not exploit_ok:
-                clean_boot_id = post_attempt_boot
-                continue
-            if self.enable_updates:
-                self.enable_ota_packages()
-            if self.remove_shizuku:
-                self.uninstall_shizuku_payload()
-            if self.presence_fps_cap is not None:
-                self.activate_presence_helper()
-            if self.kiosk_home:
-                self.configure_kiosk_home(enabled=True)
-            if self.restore_kiosk_home:
-                self.configure_kiosk_home(enabled=False)
-            self.verify_across_two_reboots(first_boot=post_attempt_boot)
-            return
+                exploit_ok = self.exploit(base, memstart, attempt)
+                post_attempt_boot = self.connect_after_reboot(boot_id)
+                if not exploit_ok:
+                    clean_boot_id = post_attempt_boot
+                    continue
+                self.uninstall_exploit_sentinel()
+                sentinel_removed = True
+                if self.enable_updates:
+                    self.enable_ota_packages()
+                if self.remove_shizuku:
+                    self.uninstall_shizuku_payload()
+                if self.presence_fps_cap is not None:
+                    self.activate_presence_helper()
+                if self.kiosk_home:
+                    self.configure_kiosk_home(enabled=True)
+                if self.restore_kiosk_home:
+                    self.configure_kiosk_home(enabled=False)
+                self.verify_across_two_reboots(first_boot=post_attempt_boot)
+                return
+        finally:
+            if not sentinel_removed:
+                self.uninstall_exploit_sentinel(best_effort=True)
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
 
@@ -3345,6 +3424,7 @@ def build(
     build_components: bool,
     build_shizuku: bool,
     build_presence: bool,
+    build_sentinel: bool,
 ) -> None:
     if target is None:
         raise ProvisionError("target must be selected before building")
@@ -3361,6 +3441,8 @@ def build(
         commands.append(["make", "-C", str(ROOT / "shizuku-helper"), "all"])
     if build_presence:
         commands.append(["make", "-C", str(ROOT / "presence-helper"), "all"])
+    if build_sentinel:
+        commands.append(["make", "-C", str(ROOT / "exploit-sentinel"), "all"])
     for command in commands:
         result = subprocess.run(command, cwd=ROOT, check=False)
         if result.returncode != 0:
