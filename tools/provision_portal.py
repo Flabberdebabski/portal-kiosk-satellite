@@ -43,6 +43,7 @@ SHIZUKU_HELPER_LOCAL = ROOT / "shizuku-helper/build/portal-shizuku-helper.apk"
 SHIZUKU_KEY_REMOTE = "/data/local/tmp/portal-shizuku-adbkey.pub"
 SHIZUKU_SAVED_KEY_REMOTE = "/data/local/tmp/portal-shizuku-adbkey-v1.pub"
 APP_VERIFIER_BACKUP_REMOTE = "/data/local/tmp/portal-package-verifier-before-v1"
+APP_VERIFIER_PACKAGE = "com.facebook.appverifier"
 SHIZUKU_VERSION = "13.6.0.r1086.2650830c"
 SHIZUKU_APK_NAME = "shizuku-v13.6.0.r1086.2650830c-release.apk"
 SHIZUKU_APK_URL = (
@@ -748,15 +749,18 @@ class PortalProvisioner:
             },
             "app_updates": {
                 "meta_verifier_package_enabled": (
-                    "com.facebook.appverifier" in installed
-                    and "com.facebook.appverifier" not in disabled
+                    APP_VERIFIER_PACKAGE in installed
+                    and APP_VERIFIER_PACKAGE not in disabled
                 ),
                 "package_verifier_setting": (
                     None
                     if package_verifier_setting == "null"
                     else package_verifier_setting
                 ),
-                "third_party_updates_allowed": package_verifier_setting == "0",
+                "third_party_updates_allowed": (
+                    package_verifier_setting == "0"
+                    or APP_VERIFIER_PACKAGE in disabled
+                ),
                 "backup_present": exists(APP_VERIFIER_BACKUP_REMOTE),
             },
             "shizuku": {
@@ -1063,7 +1067,13 @@ class PortalProvisioner:
         action = "restored" if self.restore_privacy_dns else "configured"
         print(f"PRIVACY_DNS_OK action={action} mode={mode} hostname={hostname}")
 
-    def read_app_verifier_backup(self) -> str:
+    def app_verifier_package_disabled(self) -> bool:
+        disabled = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+        ).stdout
+        return f"package:{APP_VERIFIER_PACKAGE}" in disabled.splitlines()
+
+    def read_app_verifier_backup(self) -> dict[str, object]:
         result = self.adb_run(
             ["shell", "cat", APP_VERIFIER_BACKUP_REMOTE], timeout=5, check=True
         )
@@ -1071,12 +1081,33 @@ class PortalProvisioner:
             backup = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise ProvisionError(f"invalid app-verifier backup: {exc}") from exc
-        if not isinstance(backup, dict) or backup.get("schema") != 1:
+        if not isinstance(backup, dict) or backup.get("schema") not in {1, 2}:
             raise ProvisionError("unrecognized app-verifier backup")
         value = backup.get("package_verifier_enable")
         if value not in {"0", "1", "null"}:
             raise ProvisionError("app-verifier backup is incomplete")
-        return value
+        if backup["schema"] == 1:
+            # Schema 1 predated package-state management and always left Meta's
+            # verifier enabled, so preserve that behavior when upgrading.
+            backup["meta_verifier_package_disabled"] = False
+        if not isinstance(backup.get("meta_verifier_package_disabled"), bool):
+            raise ProvisionError("app-verifier package backup is incomplete")
+        return backup
+
+    def write_app_verifier_backup(self, backup: dict[str, object]) -> None:
+        with tempfile.TemporaryDirectory(prefix="portal-app-verifier-") as temp:
+            local = pathlib.Path(temp) / "app-verifier.json"
+            local.write_text(json.dumps(backup, indent=2) + "\n")
+            self.adb_run(
+                ["push", str(local), APP_VERIFIER_BACKUP_REMOTE],
+                timeout=15,
+                check=True,
+            )
+        self.adb_run(
+            ["shell", "chmod", "0600", APP_VERIFIER_BACKUP_REMOTE],
+            timeout=5,
+            check=True,
+        )
 
     def allow_third_party_app_updates(self) -> None:
         existing = self.adb_run(
@@ -1092,30 +1123,42 @@ class PortalProvisioner:
                 raise ProvisionError(
                     f"unexpected package_verifier_enable value: {original!r}"
                 )
-            backup = {"schema": 1, "package_verifier_enable": original}
-            with tempfile.TemporaryDirectory(prefix="portal-app-verifier-") as temp:
-                local = pathlib.Path(temp) / "app-verifier.json"
-                local.write_text(json.dumps(backup, indent=2) + "\n")
-                self.adb_run(
-                    ["push", str(local), APP_VERIFIER_BACKUP_REMOTE],
-                    timeout=15,
-                    check=True,
-                )
-            self.adb_run(
-                ["shell", "chmod", "0600", APP_VERIFIER_BACKUP_REMOTE],
-                timeout=5,
-                check=True,
-            )
+            backup = {
+                "schema": 2,
+                "package_verifier_enable": original,
+                "meta_verifier_package_disabled": (
+                    self.app_verifier_package_disabled()
+                ),
+            }
+            self.write_app_verifier_backup(backup)
+        else:
+            backup = self.read_app_verifier_backup()
+            if backup["schema"] == 1:
+                backup["schema"] = 2
+                self.write_app_verifier_backup(backup)
         self.adb_run(
             ["shell", "settings", "put", "global", "package_verifier_enable", "0"],
             timeout=10,
+            check=True,
+        )
+        self.adb_run(
+            [
+                "shell",
+                "pm",
+                "disable-user",
+                "--user",
+                "0",
+                APP_VERIFIER_PACKAGE,
+            ],
+            timeout=15,
             check=True,
         )
         self.adb_run(["shell", "sync"], timeout=10, check=True)
         self.verify_app_verifier_setting()
 
     def restore_app_verifier_setting(self) -> None:
-        original = self.read_app_verifier_backup()
+        backup = self.read_app_verifier_backup()
+        original = str(backup["package_verifier_enable"])
         command = [
             "shell",
             "settings",
@@ -1126,6 +1169,20 @@ class PortalProvisioner:
         if original != "null":
             command.append(original)
         self.adb_run(command, timeout=10, check=True)
+        package_action = (
+            "disable-user"
+            if backup["meta_verifier_package_disabled"]
+            else "enable"
+        )
+        package_command = [
+            "shell",
+            "pm",
+            package_action,
+            "--user",
+            "0",
+            APP_VERIFIER_PACKAGE,
+        ]
+        self.adb_run(package_command, timeout=15, check=True)
         self.adb_run(["shell", "sync"], timeout=10, check=True)
         self.verify_app_verifier_setting()
 
@@ -1136,18 +1193,27 @@ class PortalProvisioner:
             check=True,
         ).stdout.strip()
         expected = "0"
+        expected_package_disabled = True
         action = "updates-allowed"
         if self.restore_app_verifier:
-            expected = self.read_app_verifier_backup()
+            backup = self.read_app_verifier_backup()
+            expected = str(backup["package_verifier_enable"])
+            expected_package_disabled = bool(
+                backup["meta_verifier_package_disabled"]
+            )
             action = "restored"
-        if actual != expected:
+        package_disabled = self.app_verifier_package_disabled()
+        if actual != expected or package_disabled != expected_package_disabled:
             raise ProvisionError(
-                "package verifier setting did not persist: "
-                f"actual={actual!r} expected={expected!r}"
+                "package verifier state did not persist: "
+                f"setting={actual!r}/{expected!r} "
+                f"package_disabled={int(package_disabled)}/"
+                f"{int(expected_package_disabled)}"
             )
         print(
             f"APP_UPDATES_OK action={action} "
-            f"package_verifier_enable={actual}"
+            f"package_verifier_enable={actual} "
+            f"meta_verifier_disabled={int(package_disabled)}"
         )
 
     def resolve_shizuku_apk(self) -> pathlib.Path:
@@ -3361,8 +3427,8 @@ def parse_args() -> argparse.Namespace:
         "--restore-app-verifier",
         action="store_true",
         help=(
-            "restore package_verifier_enable to the value saved by the first "
-            "--allow-app-updates run"
+            "restore package_verifier_enable and Meta's verifier package to "
+            "the states saved by the first --allow-app-updates run"
         ),
     )
     update_group = parser.add_mutually_exclusive_group()

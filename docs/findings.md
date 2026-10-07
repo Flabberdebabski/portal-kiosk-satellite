@@ -1784,3 +1784,25 @@ boots `441ba1cc-e5fe-4f61-87ef-d97884b0354f` and
 `77394ed3-943a-4351-bdb2-e38e66d1506e`. The final boot retained both AIService
 streams, an active Kiosk Satellite camera client, and the audio watchdog with
 AEC and NS at zero.
+
+159. The setting-only third-party update control was not durable over longer
+field use. Before a Kiosk Satellite `2026.10.11` self-update,
+`package_verifier_enable` had returned from `0` to `1` while
+`com.facebook.appverifier` remained enabled. Shizuku was healthy and running as
+shell, but Package Manager again returned `INSTALL_FAILED_VERIFICATION_FAILURE`.
+
+The repaired `--allow-app-updates` action now backs up both the global setting
+and the verifier package's user state, writes the setting to `0`, and disables
+the Meta verifier package for user 0. Existing schema-1 backups are upgraded
+with the prior implementation's enabled-package state. The restore action
+returns both controls to their saved values, and status treats either the
+disabled package or global value `0` as sufficient to allow third-party
+updates. Android's own signature-match and downgrade checks are unchanged.
+
+The combined state survived clean boots
+`f2e85940-fba4-4897-9518-51675c1a4ab8` and
+`3f5b8b08-18f7-40aa-aa32-b3e08efb60b4`. The exact arm64 `2026.10.11` APK,
+SHA-256 `9326f711df469e5483a77e335de3cb7b4799faef0ed51e568f33c7d7dff62c13`,
+then installed successfully through shell Package Manager. The device reported
+version code 309, Shizuku continued as shell, and Kiosk Satellite remained the
+persistent HOME activity.

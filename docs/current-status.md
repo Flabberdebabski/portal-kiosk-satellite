@@ -265,13 +265,13 @@ compared the KS certificate with Meta's private certificate set, logged
 `INSTALL_FAILED_VERIFICATION_FAILURE`.
 
 The independent `--allow-app-updates` action saves the current
-`package_verifier_enable` value and sets it to `0`. This leaves Meta's verifier
-package installed and enabled while preventing Android from invoking its
-obsolete allowlist. Android's normal matching-signature and version checks
-remain active. The action works with the normal package installer, Device
-Owner, the KS update helper, and Shizuku. It is included in `--profile kiosk`
-but does not install or require Shizuku. `--restore-app-verifier` restores the
-exact saved setting.
+`package_verifier_enable` value and verifier-package state, sets the global
+value to `0`, and disables `com.facebook.appverifier` for user 0. Package
+disablement is the durable control if Meta rewrites the global setting.
+Android's normal matching-signature and version checks remain active. The
+action works with the normal package installer, Device Owner, the KS update
+helper, and Shizuku. It is included in `--profile kiosk` but does not install
+or require Shizuku. `--restore-app-verifier` restores both saved states.
 
 An already-installed non-Meta helper then reinstalled successfully with no
 Facebook verifier event. The setting survived clean verification boots
@@ -279,6 +279,16 @@ Facebook verifier event. The setting survived clean verification boots
 `63da4d22-c086-4f25-b410-18bdae844e5c`. Kiosk Satellite was updated to
 `2026.10.7`, Meta's verifier package remained enabled, and the device-local
 Shizuku helper started `shizuku_server` as shell after the final reboot.
+
+Later field testing found the setting had returned to `1`, causing the
+`2026.10.11` Kiosk Satellite self-update to fail with the same verifier error.
+The strengthened package-disable implementation passed clean boots
+`f2e85940-fba4-4897-9518-51675c1a4ab8` and
+`3f5b8b08-18f7-40aa-aa32-b3e08efb60b4`. On the final boot the setting was
+`0`, the Meta verifier package was disabled, and Shizuku was running as shell.
+Installing the exact arm64 `2026.10.11` release through shell Package Manager
+then succeeded; the device reported Kiosk Satellite version code 309 and kept
+its persistent HOME role.
 
 ## Device-local Shizuku
 

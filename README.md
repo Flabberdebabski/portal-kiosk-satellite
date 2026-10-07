@@ -662,16 +662,18 @@ Meta registers `com.facebook.appverifier` as Android's package-verification
 agent. It rejects APKs whose certificates are outside Meta's private allowlist,
 including correctly signed Kiosk Satellite releases, with
 `INSTALL_FAILED_VERIFICATION_FAILURE`. This action saves the existing Android
-setting and sets `package_verifier_enable=0`. The setting survives reboot, and
-the provisioner verifies it on two separate boots.
+setting and verifier-package state, sets `package_verifier_enable=0`, and
+disables Meta's verifier package for user 0. The package state is the durable
+control if Meta later rewrites the Android setting. The provisioner verifies
+both states on two separate boots.
 
 This action is independent of Shizuku. It allows updates installed through the
 normal Android confirmation screen, Kiosk Satellite Device Owner, the optional
 update helper, or Shizuku. Android continues to require a matching application
 signature for updates and continues to reject version downgrades. Meta's
-verifier package remains installed and enabled.
+verifier package remains installed and can be restored to its saved state.
 
-Restore the saved setting with:
+Restore the saved Android setting and verifier-package state with:
 
 ```sh
 python3 tools/provision_portal.py \
