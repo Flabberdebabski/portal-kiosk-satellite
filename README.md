@@ -61,7 +61,7 @@ All changes are persistent and survive reboots.
   camera sensor and Kiosk Satellite's independent RTSP stream at their normal
   configured frame rates. A device-local helper reapplies the cap after every
   boot and then exits.
-- **[Lightweight presence mode](#lightweight-presence-mode):** combines the
+- **[Lightweight camera mode](#lightweight-camera-mode):** combines the
   full-scene profile and 2 FPS analysis cap with a smaller 640-by-480 Meta
   analysis surface. This reduces Meta's analysis pixel count without changing
   the full field of view or Kiosk Satellite's separate camera and RTSP streams.
@@ -138,7 +138,7 @@ the first exploit attempt succeeds.
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
   `aapt`, `d8`, `zipalign`, and `apksigner` when using `--shizuku` or
-  `--presence-fps-cap` (including `--lightweight-presence`)
+  `--presence-fps-cap` (including `--lightweight-camera`)
 - Internet access to download the pinned official Shizuku APK, or a local APK
   supplied with `--shizuku-apk PATH`
 
@@ -332,7 +332,7 @@ The `kiosk` profile expands to the audio, Device Owner, update blocking,
 debloat, Meta-account removal, presence optimization, and third-party app
 update actions. You may add `--privacy-dns HOSTNAME` when you operate a
 DNS-over-TLS filtering resolver, or `--shizuku` when apps on the Portal need
-Shizuku's shell-level APIs. Add `--lightweight-presence` for the tested
+Shizuku's shell-level APIs. Add `--lightweight-camera` for the tested
 full-scene, 2 FPS, 640-by-480 Meta presence configuration.
 
 The Portal will reboot several times. Leave it powered and do not close the
@@ -359,7 +359,7 @@ available rollback.
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
-| Use the full lightweight presence preset | `--lightweight-presence` | Yes | `--restore-lightweight-presence` and the other presence rollback flags |
+| Use the full lightweight camera preset | `--lightweight-camera` | Yes | `--restore-lightweight-camera` and the other presence rollback flags |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
 | Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
 | Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
@@ -558,13 +558,13 @@ python3 tools/provision_portal.py \
 The installer and restore action use atomic file replacement, preserve the
 app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
 
-#### Lightweight presence mode
+#### Lightweight camera mode
 
 For a smaller Meta analysis surface that retains the complete scene, run:
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --lightweight-presence
+  --serial "$PORTAL_IP:5555" --lightweight-camera
 ```
 
 This preset applies the full-scene presence profile, caps Meta's analysis
@@ -592,7 +592,7 @@ resolution while keeping the full-scene profile and FPS cap with:
 
 ```sh
 python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --restore-lightweight-presence
+  --serial "$PORTAL_IP:5555" --restore-lightweight-camera
 ```
 
 Use `--restore-presence-fps` and `--restore-presence-profile` as well when you

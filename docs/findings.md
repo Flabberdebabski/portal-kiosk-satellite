@@ -1775,7 +1775,7 @@ existing permissive interval, running `/system/bin/setprop` through
 to append the values to Android's serialized persistent-property file was
 rejected during the next boot and was not retained.
 
-The reversible `--lightweight-presence` action now applies the tested
+The reversible `--lightweight-camera` action now applies the tested
 full-scene profile, selects 2 FPS unless another valid cap was supplied, saves
 the original effective analysis dimensions, and requests 640 by 480.
 Verification reads the actual active camera surface rather than relying on
@@ -1793,5 +1793,5 @@ for cameraserver, and 8.4% for VirtualCameraManager. This was not a matched
 scene-controlled A/B test. It shows that the resolution change leaves the
 dominant 2048-by-1536 provider work intact and should be described as a modest
 Meta-side optimization. It does not lower Kiosk Satellite's finger-count CPU
-cost. `--restore-lightweight-presence` returns the Meta analysis surface to
+cost. `--restore-lightweight-camera` returns the Meta analysis surface to
 the saved dimensions without removing the full-scene or FPS settings.

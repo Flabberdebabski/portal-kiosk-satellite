@@ -209,7 +209,7 @@ earlier 47.8% stock baseline and 22.1% cropped profile.
 Kiosk Satellite field testing after the final reboot confirmed that presence
 coverage again spans the full scene with the background detector still off.
 
-The optional `--lightweight-presence` preset keeps that full-scene profile,
+The optional `--lightweight-camera` preset keeps that full-scene profile,
 selects the tested 2 FPS analysis cap, and reduces only AIService's private YUV
 analysis surface from 1024 by 768 to 640 by 480. The dimensions come from
 `persist.camera.ml.surface.dim.w` and `.h`. Those vendor properties carry the
@@ -235,7 +235,7 @@ motion make these snapshots unsuitable as a strict before/after benchmark,
 but they establish the practical limit: the smaller Meta analysis surface is
 a modest AIService optimization and does not remove the provider's expensive
 2048-by-1536 stream or reduce Kiosk Satellite's finger-count workload.
-`--restore-lightweight-presence` restores the saved analysis dimensions while
+`--restore-lightweight-camera` restores the saved analysis dimensions while
 retaining the other presence settings.
 
 Presence verification is unattended. AIService logs live analysis and
