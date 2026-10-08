@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="dev.portal.presencehelper"
-    android:versionCode="1"
-    android:versionName="1.0">
+    android:versionCode="2"
+    android:versionName="1.1">
 
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="25" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -11,7 +11,7 @@
     <application
         android:allowBackup="false"
         android:debuggable="true"
-        android:label="Portal Presence FPS Helper"
+        android:label="Portal Presence Startup Helper"
         android:persistent="false">
         <service
             android:name=".StartupService"

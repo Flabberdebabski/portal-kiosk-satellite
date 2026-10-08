@@ -15,13 +15,14 @@ public final class BootReceiver extends BroadcastReceiver {
         String action = intent.getAction();
         if (ACTION_CONFIG.equals(action)) {
             int fps = intent.getIntExtra("fps", 0);
-            if (fps < 1 || fps > 10) {
-                Log.e(TAG, "refusing invalid presence FPS=" + fps);
+            if (fps < 0 || fps > 10) {
+                Log.e(TAG, "refusing invalid presence startup FPS=" + fps);
                 return;
             }
             context.getSharedPreferences("config", Context.MODE_PRIVATE)
                     .edit().putInt("fps", fps).apply();
-            Log.i(TAG, "configured presence FPS=" + fps);
+            Log.i(TAG, "configured presence startup fps="
+                    + (fps == 0 ? "unchanged" : fps));
             context.startService(new Intent(context, StartupService.class));
             return;
         }

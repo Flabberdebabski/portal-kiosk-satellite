@@ -58,7 +58,8 @@ All changes are persistent and survive reboots.
   disables optional Smart Camera segmentation, liveness, and re-identification
   workloads while locking the analysis pipeline to the full camera field of
   view and retaining the LED-free person-detection log consumed by Kiosk
-  Satellite. The tested profile reduces AIService CPU use and includes an
+  Satellite. A device-local boot helper starts the retained pipeline after
+  every reboot. The tested profile reduces AIService CPU use and includes an
   exact rollback.
 - **[Optional presence-analysis frame-rate cap](#optional-presence-analysis-frame-rate-cap):**
   limits Meta's pose-analysis callback to a selected rate while leaving the
@@ -141,7 +142,8 @@ the first exploit attempt succeeds.
 - A Java Development Kit with `javac` and `jar`
 - Android SDK Platform 36 and an Android Build Tools installation containing
   `aapt`, `zipalign`, and `apksigner`; `d8` is also required by actions that
-  build Java helpers, including `--shizuku` and `--presence-fps-cap`
+  build Java helpers, including `--shizuku`, `--optimize-presence`, and
+  `--presence-fps-cap`
 - Internet access to download the pinned official Shizuku APK, or a local APK
   supplied with `--shizuku-apk PATH`
 
@@ -581,7 +583,11 @@ verification boot. Those checks cover the same retained path
 that updates AIService's world model and emits `Notify people presence`, so the
 two-reboot verification can run unattended. An actual presence event is
 reported as additional evidence when one occurs, but it is not required for a
-successful run. On the tested Portal Go, the original cropped optimization
+successful run. A small device-local helper starts Meta's retained analysis
+activity after every reboot and immediately returns to Kiosk Satellite. It
+uses a dedicated key accepted only by the Portal's loopback ADB listener, so
+no host computer or Shizuku service is involved after installation. On the
+tested Portal Go, the original cropped optimization
 averaged 22.1% of one core but reduced the usable field of view. The corrected
 full-scene profile measured 35.5% in a five-minute sample, compared with 47.8%
 before optimization. Workload affects these figures, so treat them as a guide
@@ -610,17 +616,17 @@ python3 tools/provision_portal.py \
 ```
 
 Valid values are 1 through 10. This option automatically includes the tested
-full-scene presence profile. It writes Meta's own analysis-throttle settings
-and installs a small local boot helper that applies them after each reboot,
-then stops. Applying the setting briefly opens Meta's hidden AI settings
-activity and immediately returns to the configured Home app.
+full-scene presence profile. It writes Meta's own analysis-throttle settings;
+the presence boot helper applies them after each reboot, then stops. Applying
+the setting briefly opens Meta's hidden AI settings activity and immediately
+returns to the configured Home app.
 
 Android blocks an ordinary background app from opening that activity, so the
 helper uses the Portal's loopback ADB listener at `127.0.0.1:5555`. The
 temporary-root stage authorizes a dedicated per-device key stored only in the
 helper's private app data. It does not depend on Shizuku, another computer, or
-network access after installation. Both presence rollback commands remove the
-helper and its authorized key.
+network access after installation. Restoring the complete presence profile
+removes the helper and its authorized key.
 
 The cap is downstream of camera capture. On the tested Portal Go, the active
 camera request retained its normal `[8, 30]` target range while Meta logged a
@@ -631,15 +637,16 @@ the configured roughly 6 FPS stream, while Meta analysis remained at 2 FPS.
 The provisioner verifies the applied analysis rate, full field of view, camera
 request, pose pipeline, and helper activation on two boots.
 
-Remove only the cap and helper while keeping the full-scene optimization:
+Remove only the cap while keeping the full-scene optimization and its boot
+helper:
 
 ```sh
 python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-presence-fps
 ```
 
-`--restore-presence-profile` also removes the cap and helper before restoring
-the complete original presence configuration.
+`--restore-presence-profile` removes the cap, boot helper, and its loopback ADB
+key before restoring the complete original presence configuration.
 
 ### 7. Use a filtering Private DNS resolver
 
@@ -825,6 +832,8 @@ failure.
   exact-build target definitions
 - `helper/`: persistent native audio watchdog and the earlier helper APK
 - `shizuku-helper/`: device-local loopback-ADB launcher for Shizuku
+- `presence-helper/`: device-local AIService pipeline and optional FPS-cap
+  activator
 - `exploit-sentinel/`: temporary no-permission debuggable package used by the
   GhostLock scheduler trigger
 - `tools/provision_portal.py`: user-facing build, installation, retry, and

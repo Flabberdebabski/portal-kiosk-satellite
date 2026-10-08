@@ -1930,3 +1930,22 @@ settlement period already used for host-side package changes, followed by
 authenticator changes; combined account and debloat runs share the final
 component batch's wait. The host therefore cannot initiate its immediate
 verification reboot until the PackageManager state has had time to persist.
+
+164. Issue 4 confirmed the PackageManager settlement fix: all 196 intended
+cloud components and the three Meta-authenticator disables survived reboot,
+and account removal verified. Its fresh device then exposed a separate startup
+assumption. AIService was running and the full-scene profile loaded, but its
+camera client, frame streams, and pose pipeline remained inactive because
+Kiosk Satellite had replaced Meta's launcher before anything opened Meta's
+hidden AI activity. The development device already had that activity path
+running, while the optional FPS helper incidentally started it on capped
+installations.
+
+The device-local presence helper now accompanies every optimized profile,
+including the uncapped default used by `--profile kiosk`. Its boot receiver
+waits for Android startup, uses its dedicated loopback-ADB key to open the AI
+activity, returns to the configured HOME app, and exits. The verifier requires
+the helper's activation marker as well as the live camera, frame, processor,
+pose, field-of-view, and profile checks. Restoring only the FPS cap keeps the
+helper in startup-only mode; restoring the complete presence profile removes
+the helper and its authorized key.

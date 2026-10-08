@@ -243,6 +243,17 @@ streams, the frame processor, pose metrics, all five profile values, Meta's
 each reboot. It records a real presence event when one happens but does not
 require a person to be in view.
 
+Freshly provisioned devices may not start Meta's hidden AI activity after
+Kiosk Satellite replaces the Meta launcher as HOME. The presence helper is now
+installed for every optimized profile, including the uncapped default. Fifteen
+seconds after each boot it authenticates only to the Portal's loopback ADB
+listener, starts the AI activity, returns immediately to the configured HOME
+app, and exits. The verifier requires this activation on both clean boots. An
+FPS value of zero means startup-only and does not change the configured
+analysis rate; removing an optional FPS cap retains this startup behavior.
+Restoring the whole presence profile removes the helper and its dedicated ADB
+key.
+
 This unattended contract passed clean boots
 `3fda320e-05a2-447c-88e8-a9ad3319dceb` and
 `b9d4ba78-94ca-4ea7-bef0-90824d49db81`. Both also happened to emit a real
