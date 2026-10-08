@@ -241,33 +241,15 @@ verifier therefore requires the camera client, CAMERA AppOp, both frame
 streams, the frame processor, pose metrics, all five profile values, Meta's
 `Disabled hardware cropping` confirmation, and no active dewarp crop after
 each reboot. It records a real presence event when one happens but does not
-require a person to be in view.
-
-Freshly provisioned devices may not start Meta's hidden AI activity after
-Kiosk Satellite replaces the Meta launcher as HOME. The presence helper is now
-installed for every optimized profile, including the uncapped default. Fifteen
-seconds after each boot it authenticates only to the Portal's loopback ADB
-listener, starts the AI activity, returns immediately to the configured HOME
-app, and exits. The verifier requires this activation on both clean boots. An
-FPS value of zero means startup-only and does not change the configured
-analysis rate; removing an optional FPS cap retains this startup behavior.
-Restoring the whole presence profile removes the helper and its dedicated ADB
-key.
-
-An unowned or freshly reset Portal can leave the persistent PresenceManager in
-`CAMERA_SERVICE not running, but no users found yet`. Opening AIService's
-activity succeeds in that state but does not start camera capture. Helper v1.2
-therefore requests Meta's normal
-`com.facebook.aloha.START_CAMERA_SERVICE` permission and starts CameraService
-with its required `CameraService.start=true` intent extra after applying the
-settings. This recovered an intentionally reproduced idle pipeline, restored
-both analysis and ROI frames, and remained active after a clean reboot.
+require a person to be in view. The physical camera cover and the
+camera/microphone privacy control must leave the camera enabled; a failed live
+camera check now reports that requirement directly.
 
 This unattended contract passed clean boots
 `3fda320e-05a2-447c-88e8-a9ad3319dceb` and
 `b9d4ba78-94ca-4ea7-bef0-90824d49db81`. Both also happened to emit a real
-presence event. The optimization and its verifier require no post-reboot user
-interaction.
+presence event. With the hardware camera controls enabled, the optimization
+and its verifier require no post-reboot user interaction.
 
 The provisioner now has a read-only `--status` report, mutation-free
 `--dry-run`, mode-0600 `--backup` archives with SHA-256 manifests, and

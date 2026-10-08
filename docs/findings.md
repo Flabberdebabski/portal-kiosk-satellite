@@ -1931,39 +1931,18 @@ authenticator changes; combined account and debloat runs share the final
 component batch's wait. The host therefore cannot initiate its immediate
 verification reboot until the PackageManager state has had time to persist.
 
-164. Issue 4 confirmed the PackageManager settlement fix: all 196 intended
-cloud components and the three Meta-authenticator disables survived reboot,
-and account removal verified. Its fresh device then exposed a separate startup
-assumption. AIService was running and the full-scene profile loaded, but its
-camera client, frame streams, and pose pipeline remained inactive because
-Kiosk Satellite had replaced Meta's launcher before anything opened Meta's
-hidden AI activity. The development device already had that activity path
-running, while the optional FPS helper incidentally started it on capped
-installations.
+164. Issue 4 initially appeared to expose a fresh-device AIService startup
+failure: the optimized settings loaded, but the camera client, analysis
+frames, ROI frames, and pose pipeline all remained inactive. The reporter
+later confirmed that the Portal's physical camera cover was closed. Meta's
+privacy path intentionally keeps CameraService from acquiring the camera in
+that state, so the live verifier was correctly rejecting an unusable presence
+pipeline.
 
-The device-local presence helper now accompanies every optimized profile,
-including the uncapped default used by `--profile kiosk`. Its boot receiver
-waits for Android startup, uses its dedicated loopback-ADB key to open the AI
-activity, returns to the configured HOME app, and exits. The verifier requires
-the helper's activation marker as well as the live camera, frame, processor,
-pose, field-of-view, and profile checks. Restoring only the FPS cap keeps the
-helper in startup-only mode; restoring the complete presence profile removes
-the helper and its authorized key.
-
-165. The first startup-helper revision reached the hidden AI activity on the
-issue 4 device but the camera still stayed idle. Its successful helper marker,
-authorized key, and empty camera state ruled out ADB authorization and activity
-launch failure. The same state was reproduced locally by stopping Meta Presence
-and AIService after removing the Meta users. PresenceManager remained alive but
-logged `CAMERA_SERVICE not running, but no users found yet`; relaunching the
-hidden activity did not recover it.
-
-AIService declares `com.facebook.aloha.START_CAMERA_SERVICE` as a normal
-permission. Presence helper v1.2 requests that permission and directly starts
-`com.facebook.alohaapp.app.services.CameraService` with the firmware's required
-`com.facebook.alohaapp.app.services.CameraService.start=true` extra after the
-settings activity completes. A service request without that extra only creates
-the process and leaves capture inactive. The complete request recovered the
-reproduced state: camera 1 became active under AIService, analysis and ROI frame
-logs resumed, Kiosk Satellite remained HOME, and the helper repeated the same
-activation successfully after reboot.
+The experimental workaround that launched AIService and then directly started
+its CameraService was removed. It added a camera-service permission and could
+bypass PresenceManager's privacy-aware start decision without addressing the
+actual hardware condition. The optional FPS helper remains limited to applying
+an explicitly requested analysis cap. Presence failures now include the raw
+CAMERA AppOp, observed privacy/no-user diagnostics, and a direct reminder to
+open the camera cover and turn off the camera/microphone privacy control.

@@ -341,7 +341,7 @@ class PortalProvisioner:
             if self.shizuku_public_key is None:
                 raise ProvisionError("Shizuku helper key was not prepared")
             files.append((self.shizuku_public_key, SHIZUKU_KEY_REMOTE))
-        if self.presence_helper_requested():
+        if self.presence_fps_cap is not None:
             if self.presence_public_key is None:
                 raise ProvisionError("presence helper key was not prepared")
             files.append((self.presence_public_key, PRESENCE_KEY_REMOTE))
@@ -364,7 +364,7 @@ class PortalProvisioner:
             staged += f" component_ctl={COMPONENT_CTL_REMOTE}"
         if self.shizuku:
             staged += f" shizuku_key={SHIZUKU_KEY_REMOTE}"
-        if self.presence_helper_requested():
+        if self.presence_fps_cap is not None:
             staged += f" presence_key={PRESENCE_KEY_REMOTE}"
         print(f"STAGED {staged}")
 
@@ -426,8 +426,6 @@ class PortalProvisioner:
             candidates.append(SHIZUKU_HELPER_LOCAL)
             if self.shizuku_apk:
                 candidates.append(self.shizuku_apk)
-        if self.presence_helper_requested():
-            candidates.append(PRESENCE_HELPER_LOCAL)
         hashes: dict[str, str] = {}
         for path in candidates:
             if path.is_file():
@@ -738,12 +736,6 @@ class PortalProvisioner:
                 "analysis_fps_helper_key_authorized": exists(
                     PRESENCE_SAVED_KEY_REMOTE
                 ),
-                "startup_helper_installed": (
-                    f"Package [{PRESENCE_HELPER_PACKAGE}]" in presence_helper_dump
-                ),
-                "startup_helper_key_authorized": exists(
-                    PRESENCE_SAVED_KEY_REMOTE
-                ),
                 "profile_keys_loaded": profile_keys,
                 "full_scene_profile": (
                     PRESENCE_WIDE_FRAME_MARKER in logs
@@ -821,13 +813,6 @@ class PortalProvisioner:
             )
         )
 
-    def presence_helper_requested(self) -> bool:
-        return (
-            self.optimize_presence
-            or self.presence_fps_cap is not None
-            or self.restore_presence_fps
-        )
-
     def dry_run_report(self, status: dict[str, object]) -> None:
         actions = self.requested_actions()
         kiosk = status.get("kiosk_satellite", {})
@@ -876,7 +861,7 @@ class PortalProvisioner:
             required_outputs.append(str(COMPONENT_CTL_LOCAL))
         if self.shizuku:
             required_outputs.append(str(SHIZUKU_HELPER_LOCAL))
-        if self.presence_helper_requested():
+        if self.presence_fps_cap is not None:
             required_outputs.append(str(PRESENCE_HELPER_LOCAL))
         report = {
             "actions": actions,
@@ -1817,8 +1802,8 @@ class PortalProvisioner:
         )
 
     def activate_presence_helper(self) -> None:
-        fps = self.presence_fps_cap or 0
-        fps_label = str(fps) if fps else "unchanged"
+        if self.presence_fps_cap is None:
+            raise ProvisionError("presence helper requires an FPS cap")
         result = self.adb_run(
             [
                 "shell",
@@ -1831,7 +1816,7 @@ class PortalProvisioner:
                 f"{PRESENCE_HELPER_PACKAGE}/.BootReceiver",
                 "--ei",
                 "fps",
-                str(fps),
+                str(self.presence_fps_cap),
             ],
             timeout=20,
             check=True,
@@ -1857,7 +1842,7 @@ class PortalProvisioner:
         )
         print(
             f"PRESENCE_HELPER_OK package={PRESENCE_HELPER_PACKAGE} "
-            f"fps={fps_label}"
+            f"fps={self.presence_fps_cap}"
         )
 
     def uninstall_presence_helper(self) -> None:
@@ -2024,10 +2009,10 @@ class PortalProvisioner:
             environment["GHOSTLOCK_PRESENCE_FPS_CAP"] = str(
                 self.presence_fps_cap
             )
-        if self.presence_helper_requested():
             environment["GHOSTLOCK_PRESENCE_AUTHORIZE_KEY"] = "1"
         if self.restore_presence_fps:
             environment["GHOSTLOCK_RESTORE_PRESENCE_FPS"] = "1"
+            environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
         if self.restore_presence_profile:
             environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
         if (
@@ -2126,7 +2111,6 @@ class PortalProvisioner:
                 f"PORTAL_PRESENCE_FPS action=set fps={self.presence_fps_cap}",
                 True,
             )
-        if self.presence_helper_requested():
             expected_markers["presence_helper_key"] = (
                 "Presence ADB key authorize",
                 True,
@@ -2141,7 +2125,7 @@ class PortalProvisioner:
                 "PORTAL_PRESENCE_FPS action=restore",
                 True,
             )
-        if self.restore_presence_profile:
+        if self.restore_presence_fps or self.restore_presence_profile:
             expected_markers["presence_helper_key_remove"] = (
                 "Presence ADB key remove",
                 True,
@@ -2991,7 +2975,6 @@ class PortalProvisioner:
         self,
         require_profile: bool,
         expected_analysis_fps: int | None = None,
-        require_helper: bool = False,
         wait_seconds: int = 90,
     ) -> None:
         deadline = time.monotonic() + wait_seconds
@@ -3010,7 +2993,7 @@ class PortalProvisioner:
         loaded_keys: set[str] = set()
         analysis_fps_applied = False
         helper_activation = False
-        helper_key_authorized = not require_helper or self.adb_run(
+        helper_key_authorized = expected_analysis_fps is None or self.adb_run(
             ["shell", "test", "-f", PRESENCE_SAVED_KEY_REMOTE], timeout=5
         ).returncode == 0
         threads = ""
@@ -3079,17 +3062,19 @@ class PortalProvisioner:
                 )
                 for line in logs.splitlines()
             )
-            helper_activation = require_helper and any(
+            helper_activation = expected_analysis_fps is not None and any(
                 "PortalPresence" in line
-                and "presence pipeline activation complete" in line
+                and f"presence FPS activation complete fps={expected_analysis_fps}"
+                in line
                 for line in logs.splitlines()
             )
             config_ready = not require_profile or loaded_keys == set(
                 PRESENCE_PROFILE_KEYS
             )
-            fps_ready = expected_analysis_fps is None or analysis_fps_applied
-            helper_ready = not require_helper or (
-                helper_activation and helper_key_authorized
+            fps_ready = expected_analysis_fps is None or (
+                analysis_fps_applied
+                and helper_activation
+                and helper_key_authorized
             )
             metrics = self.adb_run(
                 [
@@ -3125,7 +3110,6 @@ class PortalProvisioner:
                 and (not require_profile or wide_frame)
                 and config_ready
                 and fps_ready
-                and helper_ready
             ):
                 threads = self.adb_run(
                     ["shell", "ps", "-T", "-p", pid.split()[0]], timeout=10
@@ -3149,6 +3133,12 @@ class PortalProvisioner:
                 )
                 return
             time.sleep(2)
+        camera_hint = (
+            " Check that the Portal's physical camera cover is open and its "
+            "camera/microphone privacy control is off."
+            if not camera_active
+            else ""
+        )
         raise ProvisionError(
             "presence pipeline did not pass its live compatibility check: "
             f"pid={pid!r} camera_active={int(camera_active)} "
@@ -3165,7 +3155,8 @@ class PortalProvisioner:
             f"helper_key_authorized={int(helper_key_authorized)} "
             f"presence_no_users={int(presence_no_users)} "
             f"privacy_blocked={int(privacy_blocked)} "
-            f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
+            f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}."
+            f"{camera_hint}"
         )
 
     def verify_meta_accounts_removed(self) -> None:
@@ -3239,7 +3230,6 @@ class PortalProvisioner:
             self.verify_presence_runtime(
                 require_profile=True,
                 expected_analysis_fps=self.presence_fps_cap,
-                require_helper=True,
             )
         if self.restore_presence_profile:
             self.verify_presence_runtime(require_profile=False)
@@ -3389,14 +3379,14 @@ class PortalProvisioner:
                     or self.restore_presence_profile
                 ),
                 build_shizuku=self.shizuku,
-                build_presence=self.presence_helper_requested(),
+                build_presence=self.presence_fps_cap is not None,
                 build_sentinel=True,
             )
         if self.shizuku:
             self.install_shizuku_payload()
-        if self.presence_helper_requested():
+        if self.presence_fps_cap is not None:
             self.prepare_presence_helper()
-        if self.restore_presence_profile:
+        if self.restore_presence_fps or self.restore_presence_profile:
             self.uninstall_presence_helper()
         self.prepare_exploit_sentinel()
         sentinel_removed = False
@@ -3437,7 +3427,7 @@ class PortalProvisioner:
                     self.enable_ota_packages()
                 if self.remove_shizuku:
                     self.uninstall_shizuku_payload()
-                if self.presence_helper_requested():
+                if self.presence_fps_cap is not None:
                     self.activate_presence_helper()
                 if self.kiosk_home:
                     self.configure_kiosk_home(enabled=True)
@@ -3618,9 +3608,8 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "disable Smart Camera background segmentation, liveness scoring, "
-            "and re-identification, force full-frame capture, install the "
-            "boot-time pipeline activator, and require AIService's analysis "
-            "and pose pipeline to remain live"
+            "and re-identification, force full-frame capture, and require "
+            "AIService's analysis and pose pipeline to remain live"
         ),
     )
     parser.add_argument(
