@@ -58,9 +58,9 @@ All changes are persistent and survive reboots.
   disables optional Smart Camera segmentation, liveness, and re-identification
   workloads while locking the analysis pipeline to the full camera field of
   view and retaining the LED-free person-detection log consumed by Kiosk
-  Satellite. A device-local boot helper starts the retained pipeline after
-  every reboot. The tested profile reduces AIService CPU use and includes an
-  exact rollback.
+  Satellite. A device-local boot helper starts the retained camera service and
+  pipeline after every reboot. The tested profile reduces AIService CPU use
+  and includes an exact rollback.
 - **[Optional presence-analysis frame-rate cap](#optional-presence-analysis-frame-rate-cap):**
   limits Meta's pose-analysis callback to a selected rate while leaving the
   camera sensor and Kiosk Satellite's independent RTSP stream at their normal
@@ -583,15 +583,18 @@ verification boot. Those checks cover the same retained path
 that updates AIService's world model and emits `Notify people presence`, so the
 two-reboot verification can run unattended. An actual presence event is
 reported as additional evidence when one occurs, but it is not required for a
-successful run. A small device-local helper starts Meta's retained analysis
-activity after every reboot and immediately returns to Kiosk Satellite. It
-uses a dedicated key accepted only by the Portal's loopback ADB listener, so
-no host computer or Shizuku service is involved after installation. On the
-tested Portal Go, the original cropped optimization
-averaged 22.1% of one core but reduced the usable field of view. The corrected
-full-scene profile measured 35.5% in a five-minute sample, compared with 47.8%
-before optimization. Workload affects these figures, so treat them as a guide
-rather than a fixed saving.
+successful run. A small device-local helper opens Meta's retained analysis
+activity after every reboot, directly starts its CameraService with Meta's
+normal `com.facebook.aloha.START_CAMERA_SERVICE` permission, and immediately
+returns to Kiosk Satellite. The direct service request also handles devices
+with no remaining Meta user, where Meta's presence manager otherwise leaves
+the camera pipeline idle. The settings activity uses a dedicated key accepted
+only by the Portal's loopback ADB listener, so no host computer or Shizuku
+service is involved after installation. On the tested Portal Go, the original
+cropped optimization averaged 22.1% of one core but reduced the usable field
+of view. The corrected full-scene profile measured 35.5% in a five-minute
+sample, compared with 47.8% before optimization. Workload affects these
+figures, so treat them as a guide rather than a fixed saving.
 
 The original settings-file state is stored under
 `/data/local/tmp/portal-presence-backup`. Restore it with:

@@ -2998,6 +2998,9 @@ class PortalProvisioner:
         pid = ""
         camera_active = False
         camera_allowed = False
+        camera_appop = ""
+        presence_no_users = False
+        privacy_blocked = False
         presence_event = False
         analysis_frames = False
         roi_frames = False
@@ -3033,11 +3036,22 @@ class PortalProvisioner:
                 ],
                 timeout=10,
             ).stdout
+            camera_appop = " ".join(appops.split()) or "no-operation-recorded"
             camera_allowed = "CAMERA: allow" in appops
             logs = self.adb_run(
                 ["shell", "logcat", "-d", "-v", "brief"], timeout=20
             ).stdout
             presence_event = PRESENCE_LOG_MARKER in logs
+            presence_no_users = (
+                "CAMERA_SERVICE not running, but no users found yet" in logs
+            )
+            privacy_blocked = any(
+                marker in logs.lower()
+                for marker in (
+                    "cannot start privacy mode on",
+                    "privacy mode is on",
+                )
+            )
             analysis_frames = PRESENCE_ANALYSIS_FRAME_MARKER in logs
             roi_frames = PRESENCE_ROI_FRAME_MARKER in logs
             active_request = camera.split("Tag monitoring disabled", 1)[0]
@@ -3139,6 +3153,7 @@ class PortalProvisioner:
             "presence pipeline did not pass its live compatibility check: "
             f"pid={pid!r} camera_active={int(camera_active)} "
             f"camera_allowed={int(camera_allowed)} "
+            f"camera_appop={camera_appop!r} "
             f"analysis_frames={int(analysis_frames)} "
             f"roi_frames={int(roi_frames)} "
             f"pose_metrics={int(pose_metrics)} "
@@ -3148,6 +3163,8 @@ class PortalProvisioner:
             f"analysis_fps_applied={int(analysis_fps_applied)} "
             f"helper_activation={int(helper_activation)} "
             f"helper_key_authorized={int(helper_key_authorized)} "
+            f"presence_no_users={int(presence_no_users)} "
+            f"privacy_blocked={int(privacy_blocked)} "
             f"profile_keys={','.join(sorted(loaded_keys)) or 'none'}"
         )
 

@@ -254,6 +254,15 @@ analysis rate; removing an optional FPS cap retains this startup behavior.
 Restoring the whole presence profile removes the helper and its dedicated ADB
 key.
 
+An unowned or freshly reset Portal can leave the persistent PresenceManager in
+`CAMERA_SERVICE not running, but no users found yet`. Opening AIService's
+activity succeeds in that state but does not start camera capture. Helper v1.2
+therefore requests Meta's normal
+`com.facebook.aloha.START_CAMERA_SERVICE` permission and starts CameraService
+with its required `CameraService.start=true` intent extra after applying the
+settings. This recovered an intentionally reproduced idle pipeline, restored
+both analysis and ROI frames, and remained active after a clean reboot.
+
 This unattended contract passed clean boots
 `3fda320e-05a2-447c-88e8-a9ad3319dceb` and
 `b9d4ba78-94ca-4ea7-bef0-90824d49db81`. Both also happened to emit a real

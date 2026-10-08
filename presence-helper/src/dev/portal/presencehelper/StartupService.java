@@ -1,6 +1,7 @@
 package dev.portal.presencehelper;
 
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.os.IBinder;
@@ -10,6 +11,10 @@ import android.util.Log;
 public final class StartupService extends Service {
     private static final String TAG = "PortalPresence";
     private static final long INITIAL_DELAY_MS = 15_000L;
+    private static final String CAMERA_PACKAGE = "com.facebook.portal.aiservice";
+    private static final String CAMERA_SERVICE =
+            "com.facebook.alohaapp.app.services.CameraService";
+    private static final String CAMERA_START_EXTRA = CAMERA_SERVICE + ".start";
     private volatile boolean workerRunning;
 
     @Override
@@ -31,7 +36,10 @@ public final class StartupService extends Service {
                 Log.e(TAG, "helper has no valid presence configuration");
                 return;
             }
-            activate(fps);
+            if (!activate(fps)) {
+                return;
+            }
+            startCameraPipeline(fps);
         } catch (Throwable error) {
             Log.e(TAG, "presence pipeline activation failed", error);
         } finally {
@@ -55,13 +63,26 @@ public final class StartupService extends Service {
             if (output.contains("Error:")) {
                 throw new IllegalStateException(output.trim());
             }
-            Log.i(TAG, "presence pipeline activation complete fps="
+            Log.i(TAG, "presence settings activity complete fps="
                     + (fps == 0 ? "unchanged" : fps));
             return true;
         } catch (Throwable error) {
             Log.w(TAG, "presence pipeline activation failed fps=" + fps, error);
             return false;
         }
+    }
+
+    private void startCameraPipeline(int fps) {
+        Intent intent = new Intent();
+        intent.setClassName(CAMERA_PACKAGE, CAMERA_SERVICE);
+        intent.putExtra(CAMERA_START_EXTRA, true);
+        ComponentName started = startService(intent);
+        if (started == null) {
+            throw new IllegalStateException("CameraService start returned no component");
+        }
+        Log.i(TAG, "presence pipeline activation complete fps="
+                + (fps == 0 ? "unchanged" : fps)
+                + " component=" + started.flattenToShortString());
     }
 
     @Override

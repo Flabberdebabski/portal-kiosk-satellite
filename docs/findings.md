@@ -1949,3 +1949,21 @@ the helper's activation marker as well as the live camera, frame, processor,
 pose, field-of-view, and profile checks. Restoring only the FPS cap keeps the
 helper in startup-only mode; restoring the complete presence profile removes
 the helper and its authorized key.
+
+165. The first startup-helper revision reached the hidden AI activity on the
+issue 4 device but the camera still stayed idle. Its successful helper marker,
+authorized key, and empty camera state ruled out ADB authorization and activity
+launch failure. The same state was reproduced locally by stopping Meta Presence
+and AIService after removing the Meta users. PresenceManager remained alive but
+logged `CAMERA_SERVICE not running, but no users found yet`; relaunching the
+hidden activity did not recover it.
+
+AIService declares `com.facebook.aloha.START_CAMERA_SERVICE` as a normal
+permission. Presence helper v1.2 requests that permission and directly starts
+`com.facebook.alohaapp.app.services.CameraService` with the firmware's required
+`com.facebook.alohaapp.app.services.CameraService.start=true` extra after the
+settings activity completes. A service request without that extra only creates
+the process and leaves capture inactive. The complete request recovered the
+reproduced state: camera 1 became active under AIService, analysis and ROI frame
+logs resumed, Kiosk Satellite remained HOME, and the helper repeated the same
+activation successfully after reboot.
