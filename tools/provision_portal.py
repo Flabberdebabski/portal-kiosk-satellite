@@ -150,6 +150,7 @@ class PortalProvisioner:
         presence_fps_cap: int | None = None,
         restore_presence_fps: bool = False,
         privacy_dns: str | None = None,
+        dhcp_dns: bool = False,
         restore_privacy_dns: bool = False,
         allow_app_updates: bool = False,
         restore_app_verifier: bool = False,
@@ -181,6 +182,7 @@ class PortalProvisioner:
         self.presence_fps_cap = presence_fps_cap
         self.restore_presence_fps = restore_presence_fps
         self.privacy_dns = privacy_dns
+        self.dhcp_dns = dhcp_dns
         self.restore_privacy_dns = restore_privacy_dns
         self.allow_app_updates = allow_app_updates
         self.restore_app_verifier = restore_app_verifier
@@ -384,6 +386,7 @@ class PortalProvisioner:
             "optimize_presence",
             "restore_presence_profile",
             "restore_presence_fps",
+            "dhcp_dns",
             "restore_privacy_dns",
             "allow_app_updates",
             "restore_app_verifier",
@@ -524,6 +527,7 @@ class PortalProvisioner:
         version_name = re.search(r"\bversionName=([^\s]+)", kiosk_dump)
         version_code = re.search(r"\bversionCode=(\d+)", kiosk_dump)
         logs = shell("logcat", "-d", "-v", "brief", timeout=20)
+        connectivity = shell("dumpsys", "connectivity", timeout=20)
         audio_logs = shell("logcat", "-d", "-s", "PortalAudioPersist:*", timeout=10)
         camera = shell("dumpsys", "media.camera", timeout=20)
         webview = shell("dumpsys", "webviewupdate", timeout=15)
@@ -533,6 +537,48 @@ class PortalProvisioner:
         private_dns_mode = shell("settings", "get", "global", "private_dns_mode")
         private_dns_host = shell(
             "settings", "get", "global", "private_dns_specifier"
+        )
+        active_dns: list[str] = []
+        validated_private_dns: list[str] = []
+        search_domains: str | None = None
+        for line in connectivity.splitlines():
+            if (
+                "NetworkAgentInfo{" not in line
+                or "state: CONNECTED/CONNECTED" not in line
+                or "DnsAddresses: [" not in line
+            ):
+                continue
+            match = re.search(r"DnsAddresses: \[\s*([^]]*?)\s*\]", line)
+            if match:
+                active_dns = [
+                    address.strip().lstrip("/")
+                    for address in match.group(1).split(",")
+                    if address.strip()
+                ]
+            match = re.search(
+                r"ValidatedPrivateDnsAddresses: \[\s*([^]]*?)\s*\]", line
+            )
+            if match:
+                validated_private_dns = [
+                    address.strip().lstrip("/")
+                    for address in match.group(1).split(",")
+                    if address.strip()
+                ]
+            match = re.search(r"Domains: (\S+)", line)
+            if match and match.group(1) != "null":
+                search_domains = match.group(1)
+            break
+        fallback_dns_match = re.search(
+            r"defaultIPv4DNS:\s*\[([^]]*)\]", connectivity
+        )
+        fallback_dns = (
+            [
+                address.strip().lstrip("/")
+                for address in fallback_dns_match.group(1).split(",")
+                if address.strip()
+            ]
+            if fallback_dns_match
+            else []
         )
         manifest: object
         try:
@@ -749,6 +795,17 @@ class PortalProvisioner:
             "privacy_dns": {
                 "mode": None if private_dns_mode == "null" else private_dns_mode,
                 "hostname": None if private_dns_host == "null" else private_dns_host,
+                "strategy": (
+                    "strict"
+                    if private_dns_mode == "hostname"
+                    else "network"
+                    if private_dns_mode == "off"
+                    else "automatic"
+                ),
+                "active_servers": active_dns,
+                "validated_private_servers": validated_private_dns,
+                "search_domains": search_domains,
+                "fallback_ipv4_servers": fallback_dns,
                 "backup_present": self.adb_run(
                     ["shell", "test", "-f", PRIVACY_BACKUP_REMOTE], timeout=5
                 ).returncode
@@ -946,16 +1003,7 @@ class PortalProvisioner:
         print(f"BACKUP_OK path={destination}")
         return destination
 
-    def apply_privacy_dns(self) -> None:
-        if not self.privacy_dns:
-            return
-        hostname = self.privacy_dns.strip().lower()
-        if not re.fullmatch(
-            r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
-            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
-            hostname,
-        ):
-            raise ProvisionError(f"invalid Private DNS hostname: {self.privacy_dns!r}")
+    def backup_private_dns(self) -> None:
         existing = self.adb_run(["shell", "cat", PRIVACY_BACKUP_REMOTE], timeout=5)
         if existing.returncode != 0:
             backup = {
@@ -990,6 +1038,18 @@ class PortalProvisioner:
                 timeout=5,
                 check=True,
             )
+
+    def apply_privacy_dns(self) -> None:
+        if not self.privacy_dns:
+            return
+        hostname = self.privacy_dns.strip().lower()
+        if not re.fullmatch(
+            r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+            r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?",
+            hostname,
+        ):
+            raise ProvisionError(f"invalid Private DNS hostname: {self.privacy_dns!r}")
+        self.backup_private_dns()
         self.adb_run(
             ["shell", "settings", "put", "global", "private_dns_mode", "hostname"],
             timeout=10,
@@ -1008,6 +1068,20 @@ class PortalProvisioner:
             check=True,
         )
         self.privacy_dns = hostname
+        self.verify_privacy_dns()
+
+    def apply_dhcp_dns(self) -> None:
+        self.backup_private_dns()
+        self.adb_run(
+            ["shell", "settings", "put", "global", "private_dns_mode", "off"],
+            timeout=10,
+            check=True,
+        )
+        self.adb_run(
+            ["shell", "settings", "delete", "global", "private_dns_specifier"],
+            timeout=10,
+            check=True,
+        )
         self.verify_privacy_dns()
 
     def restore_private_dns(self) -> None:
@@ -1047,7 +1121,10 @@ class PortalProvisioner:
         ).stdout.strip()
         expected_mode = "hostname"
         expected_hostname = self.privacy_dns
-        if self.restore_privacy_dns:
+        if self.dhcp_dns:
+            expected_mode = "off"
+            expected_hostname = "null"
+        elif self.restore_privacy_dns:
             result = self.adb_run(
                 ["shell", "cat", PRIVACY_BACKUP_REMOTE], timeout=5, check=True
             )
@@ -1073,7 +1150,13 @@ class PortalProvisioner:
                 f"mode={mode!r}/{expected_mode!r} "
                 f"hostname={hostname!r}/{expected_hostname!r}"
             )
-        action = "restored" if self.restore_privacy_dns else "configured"
+        action = (
+            "network"
+            if self.dhcp_dns
+            else "restored"
+            if self.restore_privacy_dns
+            else "strict"
+        )
         print(f"PRIVACY_DNS_OK action={action} mode={mode} hostname={hostname}")
 
     def app_verifier_package_disabled(self) -> bool:
@@ -1549,6 +1632,7 @@ class PortalProvisioner:
             "presence_fps_cap",
             "restore_presence_fps",
             "privacy_dns",
+            "dhcp_dns",
             "restore_privacy_dns",
             "allow_app_updates",
             "restore_app_verifier",
@@ -3233,7 +3317,7 @@ class PortalProvisioner:
             )
         if self.restore_presence_profile:
             self.verify_presence_runtime(require_profile=False)
-        if self.privacy_dns or self.restore_privacy_dns:
+        if self.privacy_dns or self.dhcp_dns or self.restore_privacy_dns:
             self.verify_privacy_dns()
         if self.allow_app_updates or self.restore_app_verifier:
             self.verify_app_verifier_setting()
@@ -3307,6 +3391,8 @@ class PortalProvisioner:
             self.disable_ota_packages()
         if self.privacy_dns:
             self.apply_privacy_dns()
+        if self.dhcp_dns:
+            self.apply_dhcp_dns()
         if self.restore_privacy_dns:
             self.restore_private_dns()
         if self.allow_app_updates:
@@ -3631,9 +3717,20 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     privacy_group.add_argument(
+        "--dhcp-dns",
+        action="store_true",
+        help=(
+            "disable Android Private DNS and use the DNS servers supplied "
+            "by the connected network"
+        ),
+    )
+    privacy_group.add_argument(
         "--restore-privacy-dns",
         action="store_true",
-        help="restore the Private DNS settings saved by --privacy-dns",
+        help=(
+            "restore the Android DNS settings saved by the first "
+            "--privacy-dns or --dhcp-dns run"
+        ),
     )
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
@@ -3737,6 +3834,7 @@ def parse_args() -> argparse.Namespace:
             args.presence_fps_cap is not None,
             args.restore_presence_fps,
             args.privacy_dns,
+            args.dhcp_dns,
             args.restore_privacy_dns,
             args.allow_app_updates,
             args.restore_app_verifier,
@@ -3787,6 +3885,7 @@ def main() -> int:
             presence_fps_cap=args.presence_fps_cap,
             restore_presence_fps=args.restore_presence_fps,
             privacy_dns=args.privacy_dns,
+            dhcp_dns=args.dhcp_dns,
             restore_privacy_dns=args.restore_privacy_dns,
             allow_app_updates=args.allow_app_updates,
             restore_app_verifier=args.restore_app_verifier,

@@ -78,6 +78,10 @@ All changes are persistent and survive reboots.
   DNS through a user-selected DNS-over-TLS resolver, allowing unwanted Meta
   endpoints to be filtered without modifying system certificates or
   installing a broad root firewall. The original DNS settings can be restored.
+- **[Network-provided DNS](#7-use-a-filtering-private-dns-resolver):** disables
+  Android's opportunistic Private DNS mode so local zones resolve through the
+  DNS servers supplied by DHCP or IPv6 router advertisements. This is useful
+  for Home Assistant and other services with private LAN hostnames.
 - **[Read-only device status](#status-report):** reports target compatibility,
   SELinux, Kiosk Satellite, Device Owner, audio, OTA, debloat, account,
   presence, DNS, third-party app updates, Shizuku, and provisioning-manifest
@@ -341,10 +345,11 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
 
 The `kiosk` profile expands to the audio, Device Owner, Kiosk Satellite home,
 update blocking, debloat, Meta-account removal, presence optimization, and
-third-party app update actions. You may add `--privacy-dns HOSTNAME` when you
-operate a DNS-over-TLS filtering resolver, or `--shizuku` when apps on the
-Portal need Shizuku's shell-level APIs. Add `--presence-fps-cap 2` when reduced
-Meta analysis CPU use is more important than its default analysis cadence.
+third-party app update actions. Add `--dhcp-dns` to use the local network's
+resolver or `--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering
+resolver. Add `--shizuku` when apps on the Portal need Shizuku's shell-level
+APIs, or `--presence-fps-cap 2` when reduced Meta analysis CPU use is more
+important than its default analysis cadence.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. For a stock Portal, also keep USB connected and follow the ADB
@@ -372,6 +377,7 @@ available rollback.
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
+| Use DNS supplied by the local network | `--dhcp-dns` | No | `--restore-privacy-dns` |
 | Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
 | Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
 
@@ -656,6 +662,24 @@ the complete original presence configuration.
 
 ### 7. Use a filtering Private DNS resolver
 
+To resolve private LAN zones through the DNS servers advertised by the active
+network, run:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --dhcp-dns
+```
+
+This disables Android's opportunistic Private DNS mode. Android then uses the
+DNS servers and search domain supplied by DHCP and IPv6 router advertisements.
+It does not force a particular server address, so the router must advertise
+the intended local resolver. In `dumpsys connectivity`, `defaultIPv4DNS` is
+only the firmware's fallback when a network supplies no resolver; the
+`DnsAddresses` field in the connected network's `LinkProperties` is the active
+server list. `--status` reports both lists separately.
+
+Alternatively, configure a specific DNS-over-TLS resolver:
+
 ```sh
 python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --privacy-dns dns.example.net
@@ -668,7 +692,7 @@ Meta endpoints without modifying system certificates or installing a broad
 root firewall. Confirm that the resolver permits the services Kiosk Satellite
 needs before applying it fleet-wide.
 
-The first run saves both original Android settings. Restore them with:
+The first DNS action saves both original Android settings. Restore them with:
 
 ```sh
 python3 tools/provision_portal.py \

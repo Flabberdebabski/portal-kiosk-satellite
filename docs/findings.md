@@ -1946,3 +1946,20 @@ actual hardware condition. The optional FPS helper remains limited to applying
 an explicitly requested analysis cap. Presence failures now include the raw
 CAMERA AppOp, observed privacy/no-user diagnostics, and a direct reminder to
 open the camera cover and turn off the camera/microphone privacy control.
+
+165. Portal connectivity diagnostics expose `defaultIPv4DNS: [8.8.4.4,
+8.8.8.8]`, but that field is a firmware fallback and does not identify the
+active Wi-Fi resolvers. The connected network's `LinkProperties` carries the
+actual `DnsAddresses` and search domain. On the tested Portal it advertised
+two local resolvers plus `1.1.1.1`; Android's default opportunistic Private DNS
+mode validated the public server, allowing it to bypass local zones or DNS
+filtering.
+
+The new non-root `--dhcp-dns` action saves the original global DNS settings,
+sets `private_dns_mode=off`, clears the strict resolver hostname, and verifies
+the state across two reboots. Private `lan.jxl.me` records resolved after the
+final boot. `--status` now reports the active servers, validated
+Private DNS servers, search domain, DNS strategy, and fallback list
+separately. The existing `--restore-privacy-dns` action restores the original
+settings for either network DNS or strict DNS-over-TLS configuration; that
+rollback also passed two clean boots.

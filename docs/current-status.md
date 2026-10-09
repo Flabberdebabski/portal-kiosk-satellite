@@ -161,9 +161,9 @@ boot also verified Device Owner, wireless ADB on port 5555, and audio parameters
 The host tool is now `tools/provision_portal.py`. Its actions are independent,
 and `--profile kiosk` selects the complete tested set. Audio and OTA changes
 have exact `--restore-audio` and `--enable-updates` rollbacks; debloat,
-presence, and Private DNS also have paired restore actions. With no action
-flag, the tool retains the former audio-provisioning default. Private DNS uses
-normal Android controls. Debloat now invokes GhostLock because retained Meta
+presence, and DNS selection also have paired restore actions. With no action
+flag, the tool retains the former audio-provisioning default. DNS selection
+uses normal Android controls. Debloat now invokes GhostLock because retained Meta
 packages require privileged component-level changes in addition to the six
 ordinary package-state changes.
 
@@ -267,6 +267,18 @@ Installation passed boots `ca89c119-f6e9-4ba1-ba83-47dae48a9b1b` and
 `8cc1f564-389d-4cae-b349-ab81c9cbaf26`; rollback passed
 `efd9e1d0-a5ea-465b-baab-1de5bcba40d5` and
 `65b4686d-621d-4dec-8c4c-12a0f5af25c1` with both original settings absent.
+
+The non-root `--dhcp-dns` action uses the same backup and rollback path but
+sets Android Private DNS to `off`. Android then uses the resolver list and
+search domain supplied by the active network instead of promoting a public
+DNS-over-TLS-capable server from that list. It passed clean verification boots
+`1c8067a5-3f2f-49e0-967b-838eeb98b840` and
+`043ba928-dca4-4fb7-a314-da16f9fec77a`; the live Portal resolved private
+`lan.jxl.me` records after the final boot. Status now separates the connected
+network's `DnsAddresses`, its validated Private DNS servers, and the firmware's
+`defaultIPv4DNS` fallback list. Restoring the original automatic mode passed
+boots `c66c0c2f-d25b-442c-abee-f037685e3cba` and
+`b615db7c-fd5c-4acd-89ad-35e4478e7c0f`.
 
 The native audio and OTA rollbacks were exercised together. Audio parameters
 3001/4001 read back at firmware defaults 1/5, the original AIService loader
