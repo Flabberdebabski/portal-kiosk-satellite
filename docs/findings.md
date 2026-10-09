@@ -1994,3 +1994,46 @@ load point, or control of the AVB-protected boot/vendor images. None is
 available through the current guarded data-only provisioning path. The live
 diagnostic was removed after collection, the device rebooted with SELinux
 enforcing, and the production exploit artifact was rebuilt from clean source.
+
+167. Audited the installed UID-1000 applications for a data-partition
+boot-execution hook. Fifteen Meta packages share `android.uid.system`; all are
+signed by Meta's production System Software certificate, SHA-256
+`fd445b9e9ee310978a769762e99736d07f833e6e64b419a27894defa9b2592db`, and
+none is debuggable or available through `run-as`. The persistent or
+boot-received services include Platform Secure State, Platform Battery State,
+Virtual Camera Manager, Platform State, Platform Mobile Config, Wi-Fi
+Diagnostics, and CNS Health Monitor.
+
+Static instruction tracing found no `DexClassLoader`,
+`InMemoryDexClassLoader`, caller-selected `System.load()`, or other executable
+load from writable `/data` in those boot service paths. Virtual Camera Manager
+loads the fixed `vcmservice_jni` name from AVB-protected `/system/lib64`.
+OtaUi contains generic SoLoader and dextricks library classes, but its boot
+components do not initialize an external code source and its APK contains no
+native, dex, jar, or exopackage payload outside its normal signed dex files.
+FBA contains duplicate framework implementation classes with process and path
+loader calls, but no FBA boot component references those copies.
+
+Wi-Fi Diagnostics is exported, runs as UID 1000, and contains a real
+`Runtime.exec(String)` helper. Its reachable callers supply only fixed `iw`
+commands and `ndc resolver flushnet` followed by an integer network ID; the
+service exposes no caller-selected executable or argument. It also runs in the
+`network_stack` SELinux domain, which cannot find or call Meta's privacy HIDL
+service. This is therefore a diagnostic interface, not an execution hook.
+
+UID 1000 by itself is insufficient. The privacy HAL also requires an allowed
+SELinux caller domain. Platform Secure State has both UID 1000 and the
+`system_app` domain, but its published Binder surface contains privacy-state
+operations and LED observation only; it does not expose the HAL's global
+`clearLed()` operation. Replacing or updating any of these apps would require
+Meta's private platform-signing key. Poisoning compiled ART cache files remains
+a firmware-specific, checksum-sensitive research idea rather than a verified
+or supportable persistence mechanism.
+
+Current result: the firmware already has suitable UID-1000 processes at boot,
+but no writable path was found for making one execute provisioner-controlled
+code. A safe persistent hook still requires a separate code-loading or
+confused-deputy vulnerability, Meta's platform key, or control of the verified
+system/boot chain. For camera-light control the hook would also have to react
+after every camera-provider vote; a one-time boot call would be overwritten
+when camera 0 opens.

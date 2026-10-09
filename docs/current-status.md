@@ -466,6 +466,28 @@ writable provider hook to make the change durable. The orange indication with
 the physical cover closed is separate hardware; the kernel exposes no orange
 LED control. The provisioner therefore does not offer a camera-light option.
 
+## UID-1000 boot hook result
+
+The firmware starts several Meta applications as UID 1000, including
+Platform Secure State, Platform Battery State, Virtual Camera Manager, and
+other boot receivers. An audit of all 15 Meta UID-1000 APKs found no writable
+dynamic-code or native-library load point in their boot paths. They are
+non-debuggable and signed with Meta's production platform certificate, so the
+provisioner cannot replace or update them with its own code.
+
+The exported Wi-Fi Diagnostics service does contain a command runner, but all
+reachable commands are fixed by the APK and its `network_stack` SELinux domain
+cannot call the privacy HAL. Platform Secure State has the required UID and
+SELinux domain, but its Binder API does not expose the HAL's global LED reset.
+No supported data-only UID-1000 boot hook is therefore available. Compiled ART
+cache substitution has not been accepted as a persistence route because it is
+firmware-specific, checksum-sensitive, and can be discarded by dexopt.
+
+Even a one-shot UID-1000 command at boot would not keep the green camera light
+off: the native camera provider adds a new vote whenever camera 0 opens. A
+working implementation would need a resident allowed-domain client that
+clears each new vote or an interception inside the provider itself.
+
 ## Account-free Kiosk Satellite home
 
 After the local Meta owner account was removed, Portal firmware selected
