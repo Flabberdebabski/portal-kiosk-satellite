@@ -1963,3 +1963,34 @@ Private DNS servers, search domain, DNS strategy, and fallback list
 separately. The existing `--restore-privacy-dns` action restores the original
 settings for either network DNS or strict DNS-over-TLS configuration; that
 rollback also passed two clean boots.
+
+166. Distinguished the Portal Go's camera-use LED from its physical-cover
+indicator. When a Camera2 client opens camera 0, the native camera provider
+calls `PrivacyStateClient::setComponentLed(true)`. The privacy HAL then writes
+`1` to `/sys/module/privacy/fbp_led_state`, and its logs report the green LED
+vote under the camera provider's PID. Closing the camera removes that vote and
+turns the green LED off. The earlier zero-valued sysfs snapshot was taken while
+camera 0 was closed, so it did not establish that the visible green camera-use
+light was outside software control.
+
+The orange closed-cover indication is a separate hardware path. Meta's kernel
+driver exposes `privacy_green` plus the privacy-enter, microphone-privacy, and
+camera-privacy GPIOs; it exposes no orange LED node or cover-light output. The
+Silego privacy controller remains the likely source of that indication.
+
+The software green LED can be changed with temporary root, but no durable
+data-partition control was found. The camera provider maps its Smart Camera and
+privacy client libraries only from AVB-protected `/vendor/lib64`, with no
+executable mapping from `/data`. The HAL records component votes per caller
+PID, so a helper's `disableLedComponent(Camera)` call cannot cancel the camera
+provider's vote. Its global `clearLed()` operation is restricted to UID 1000,
+and SELinux permits the privacy HIDL service only to selected platform and HAL
+domains; shell and AIService cannot act as a replacement client. Every camera
+open also reapplies the kernel's device-tree brightness of 100.
+
+No `--disable-camera-light` action was added. A persistent implementation needs
+a verified UID-1000 or early-boot execution hook, a writable camera-provider
+load point, or control of the AVB-protected boot/vendor images. None is
+available through the current guarded data-only provisioning path. The live
+diagnostic was removed after collection, the device rebooted with SELinux
+enforcing, and the production exploit artifact was rebuilt from clean source.

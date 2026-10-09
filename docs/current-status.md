@@ -451,6 +451,21 @@ not produce a material CPU reduction, so the ineffective `--lightweight-camera`
 option is no longer exposed. The supported controls remain the full-scene
 presence profile and optional analysis callback frame-rate cap.
 
+## Camera indicator result
+
+The green light shown while camera 0 is open is software controlled, but it is
+asserted inside the native camera provider. That provider votes through Meta's
+privacy HAL, which writes the `privacy_green` kernel LED. The HAL keeps votes
+per process and reserves its global reset for UID 1000, while SELinux blocks
+ordinary apps, AIService, and ADB shell from the HIDL service. The provider's
+relevant libraries load only from the AVB-protected vendor partition.
+
+Temporary root can change the live LED sysfs nodes, but each camera open
+reapplies the firmware brightness and there is no current boot-time root or
+writable provider hook to make the change durable. The orange indication with
+the physical cover closed is separate hardware; the kernel exposes no orange
+LED control. The provisioner therefore does not offer a camera-light option.
+
 ## Account-free Kiosk Satellite home
 
 After the local Meta owner account was removed, Portal firmware selected
