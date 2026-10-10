@@ -2101,19 +2101,21 @@ set rule for that type. The original root-backed persistent property write is
 still required. UID 1000 likewise has no capability, process-transition, mount,
 verified-partition, or SELinux-policy authority that would turn it into root.
 
-Upstream Shizuku 13.6.0's native starter contains an explicit UID check and
-accepts only UID 0 or UID 2000. Static tracing of the accompanying server shows
-that a custom launcher could execute its Java main class through `app_process`
-as UID 1000: `system_app` may execute `zygote_exec`, read installed APK files,
-and exchange Binder objects with other application domains. This would expose
-the system shared UID to every Shizuku-authorized application and is materially
-broader than the current shell server. The existing `--shizuku` behavior is
-therefore unchanged. A future system-mode implementation must be a separate,
-explicit option with per-app authorization and boot-time UID/SELinux checks.
+Upstream Shizuku 13.6.0's native starter accepts only UID 0 or UID 2000, but
+that check is not what prevents a UID-1000 server here. Launching the server's
+Java main class directly with the same `app_process` command works as UID 2000.
+As UID 1000, AndroidRuntime logs its start and exits successfully before it
+logs or invokes the Java main entry point. The Shizuku server's `main()` has no
+UID rejection. Starting it through `dalvikvm64` reaches the class, but fails
+while initializing Android's native `MessageQueue` because it lacks the normal
+framework runtime registration. The Portal's stock runtime therefore cannot
+bootstrap this standalone framework process in the `system_app` execution
+context. A supervised UID-1000 Shizuku mode is not shipped.
 
-Current allocation: keep camera-light control in the UID-1000 helper; retain
-audio inside AIService, presence configuration behind its loopback-ADB helper,
-and charging as unsupported; continue using temporary root for one-time data
-and property changes. If a stable non-corrupting UID-0 boot supervisor is ever
+Current allocation: keep camera-light control and the optional presence FPS
+boot activation in the constrained UID-1000 helper; retain audio inside
+AIService; run optional Shizuku through the proven device-local UID-2000
+loopback-ADB helper; and continue using temporary root for one-time data and
+property changes. If a stable non-corrupting UID-0 boot supervisor is ever
 found, consolidate privileged persistent jobs there rather than maintaining
 multiple general-purpose privileged services.

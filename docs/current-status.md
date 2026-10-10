@@ -396,17 +396,18 @@ Meta's arbitrary analysis throttle is backed by
 Persisting the values is insufficient: `AlohaFrameProcessor` only receives the
 rate when Meta's hidden debug activity pauses. The optional
 `--presence-fps-cap FPS` action therefore stores the values with temporary
-root and installs `dev.portal.presencehelper`, which briefly launches and
-pauses that activity once after boot, then exits. Before activation,
-the privileged helper also pins the five tested full-scene profile preferences
-to false so the debug activity cannot re-enable hardware cropping.
+root and configures the shared UID-1000 boot helper to launch and pause that
+activity once after boot. Before activation, the privileged stage also pins
+the five tested full-scene profile preferences to false so the debug activity
+cannot re-enable hardware cropping.
 
-Android 10 rejected the helper's direct background activity launch. The final
-helper instead authenticates to the already-persistent ADB daemon only at
-`127.0.0.1:5555` with its own per-device key, runs the two `am start` commands
-as shell, and exits. Temporary root appends that public key without replacing
-the user's ADB keys. Presence rollback removes both the package and its saved
-authorized key; no Shizuku installation or external host is required at boot.
+Android 10 rejected the original ordinary application's direct background
+activity launch, which led to a loopback-ADB helper. The current implementation
+uses the constrained Platform Battery State ART hook instead. Its UID-1000
+worker waits for AIService, runs the two activity commands, and exits. Presence
+rollback removes the activation configuration and the legacy authorized ADB
+key. The shared native helper is retained only when the camera-indicator
+feature still needs it.
 
 The live 2 FPS experiment logged `Setting AI Processing FPS 2.000000` and
 reduced steady AIService CPU samples from roughly 30-37% of one core to mostly
@@ -490,9 +491,10 @@ work after installation. On verification boots
 `fd9775bf-84e5-4e5f-b8e9-90e5de17627d` and
 `d82d87b3-eaaa-4cc0-bc84-b4af86874b33`, the child ran with real and effective
 UID/GID 1000, zero Linux capabilities, seccomp enabled, and SELinux enforcing.
-The host application retained its original process and Binder service. The
-rollback removes the helper and regenerates the application's original ART
-cache with Android's compiler.
+The host application retained its original process and Binder service.
+Rollback removes each feature's configuration. It removes the shared helper
+and regenerates the application's original ART cache only when no remaining
+UID-1000 feature needs that hook.
 
 This is a narrowly scoped UID-1000 execution hook, not persistent root. The
 same ART approach remains exact-firmware-specific and should only host helpers
@@ -523,15 +525,15 @@ The firmware policy and live process state establish these feature boundaries:
 | Wireless-ADB properties | Blocked for the required property type | `service.adb.tcp.port` is `shell_prop`, which `system_app` cannot set; retain the one-time root-backed persistent property change |
 | Kernel, mounts, verified partitions, arbitrary process credentials, and SELinux policy | Blocked | These still require UID 0 plus the relevant capability and SELinux access |
 
-Shizuku's stock native starter accepts only UID 0 or ADB UID 2000 and exits for
-UID 1000. Its Java server can technically be launched directly under
-`system_app`, because the domain may execute `app_process`, read the installed
-manager APK, and exchange Binder objects with application domains. Such a
-server would give every Shizuku-authorized application the broad system shared
-UID rather than the current shell identity. It is therefore not enabled by the
-existing `--shizuku` action. Any future system-mode option should remain
-separate, require an explicit flag, retain Shizuku's per-app authorization,
-and verify both the reported UID and SELinux context after every boot.
+Shizuku's stock native starter accepts only UID 0 or ADB UID 2000, but bypassing
+that launcher did not produce a UID-1000 server. On this firmware,
+`app_process` exits successfully before calling Shizuku's Java main class when
+started from the `system_app` context. `dalvikvm64` reaches the class but cannot
+initialize Android's native message queue. Shizuku itself does not reject UID
+1000 at that Java entry point; the stock Android runtime cannot bootstrap this
+standalone framework process in the UID-1000 execution context. The supported
+`--shizuku` action therefore remains the persistent device-local UID-2000
+shell implementation.
 
 If a stable UID-0 boot process is later established without replaying the
 GhostLock corruption, it should become the single supervisor for all tasks

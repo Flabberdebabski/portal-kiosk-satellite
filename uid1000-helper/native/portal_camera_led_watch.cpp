@@ -2,9 +2,11 @@
 #include <dlfcn.h>
 #include <elf.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <link.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -12,11 +14,16 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
 
 constexpr char kTag[] = "PortalCameraLed";
+constexpr char kPresenceTag[] = "PortalPresence";
+constexpr char kCameraEnabled[] =
+    "/data/portal-uid1000/camera-led-enabled";
+constexpr char kPresenceFps[] = "/data/portal-uid1000/presence-fps";
 constexpr char kClientLibrary[] =
     "/system/lib64/privacystate_client1.0.so";
 constexpr char kConstructor[] =
@@ -160,6 +167,69 @@ int claim_singleton() {
   return fd;
 }
 
+int read_presence_fps() {
+  int fd = open(kPresenceFps, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) return 0;
+  char value[16]{};
+  ssize_t count = read(fd, value, sizeof(value) - 1);
+  close(fd);
+  if (count <= 0) return 0;
+  char *end = nullptr;
+  long fps = strtol(value, &end, 10);
+  while (end != nullptr && (*end == '\n' || *end == '\r' || *end == ' ')) {
+    ++end;
+  }
+  return end != nullptr && *end == '\0' && fps >= 1 && fps <= 10
+      ? static_cast<int>(fps) : 0;
+}
+
+int run_command(const char *const arguments[]) {
+  pid_t child = fork();
+  if (child < 0) return -1;
+  if (child == 0) {
+    int null_fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (null_fd >= 0) {
+      dup2(null_fd, STDIN_FILENO);
+      dup2(null_fd, STDOUT_FILENO);
+      dup2(null_fd, STDERR_FILENO);
+      if (null_fd > STDERR_FILENO) close(null_fd);
+    }
+    execv(arguments[0], const_cast<char *const *>(arguments));
+    _exit(127);
+  }
+  int status = 0;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) return -1;
+  }
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+[[noreturn]] void activate_presence(int fps) {
+  sleep(15);
+  const char *const start[] = {
+      "/system/bin/cmd", "activity", "start", "--user", "0", "-n",
+      "com.facebook.portal.aiservice/"
+      "com.facebook.alohaapp.app.MainActivity", nullptr};
+  int activity_status = run_command(start);
+  sleep(3);
+  const char *const home[] = {
+      "/system/bin/cmd", "activity", "start", "--user", "0", "-a",
+      "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
+      nullptr};
+  int home_status = run_command(home);
+  if (activity_status == 0 && home_status == 0) {
+    __android_log_print(ANDROID_LOG_INFO, kPresenceTag,
+                        "presence FPS activation complete fps=%d uid=%d",
+                        fps, getuid());
+    _exit(0);
+  }
+  __android_log_print(ANDROID_LOG_ERROR, kPresenceTag,
+                      "presence FPS activation failed fps=%d uid=%d "
+                      "activity_status=%d home_status=%d",
+                      fps, getuid(), activity_status, home_status);
+  _exit(1);
+}
+
 }  // namespace
 
 int main() {
@@ -174,6 +244,31 @@ int main() {
 
   signal(SIGTERM, stop);
   signal(SIGINT, stop);
+
+  bool camera_enabled = access(kCameraEnabled, R_OK) == 0;
+  int presence_fps = read_presence_fps();
+  pid_t presence_worker = -1;
+  if (presence_fps != 0) {
+    presence_worker = fork();
+    if (presence_worker == 0) {
+      close(singleton);
+      activate_presence(presence_fps);
+    }
+    if (presence_worker < 0) {
+      __android_log_print(ANDROID_LOG_ERROR, kPresenceTag,
+                          "could not start presence worker uid=%d: %s",
+                          getuid(), strerror(errno));
+    }
+  }
+
+  if (!camera_enabled) {
+    if (presence_worker > 0) {
+      int status = 0;
+      while (waitpid(presence_worker, &status, 0) < 0 && errno == EINTR) {}
+    }
+    close(singleton);
+    return presence_fps != 0 ? 0 : 1;
+  }
 
   void *library = dlopen(kClientLibrary, RTLD_NOW | RTLD_LOCAL);
   if (library == nullptr) {

@@ -641,12 +641,14 @@ and installs a small local boot helper that applies them after each reboot,
 then stops. Applying the setting briefly opens Meta's hidden AI settings
 activity and immediately returns to the configured Home app.
 
-Android blocks an ordinary background app from opening that activity, so the
-helper uses the Portal's loopback ADB listener at `127.0.0.1:5555`. The
-temporary-root stage authorizes a dedicated per-device key stored only in the
-helper's private app data. It does not depend on Shizuku, another computer, or
-network access after installation. Both presence rollback commands remove the
-helper and its authorized key.
+Android blocks an ordinary background app from opening that activity. The
+provisioner therefore adds the one-shot activation to its narrowly scoped UID
+1000 boot helper. That helper waits for Android and AIService to settle, opens
+the hidden activity, returns to Home, and exits when the camera-indicator
+watchdog is not enabled. It does not depend on Shizuku, ADB, another computer,
+or network access after installation. Both presence rollback commands remove
+the activation configuration; the shared helper remains only if another
+feature still uses it.
 
 The cap is downstream of camera capture. On the tested Portal Go, the active
 camera request retained its normal `[8, 30]` target range while Meta logged a
@@ -901,9 +903,10 @@ failure.
   exact-build target definitions
 - `helper/`: persistent native audio watchdog and the earlier helper APK
 - `shizuku-helper/`: device-local loopback-ADB launcher for Shizuku
-- `presence-helper/`: optional device-local presence-analysis FPS-cap activator
-- `uid1000-helper/`: persistent UID-1000 camera-indicator watchdog and guarded
-  ART boot trampoline
+- `presence-helper/`: legacy loopback-ADB presence activator retained for
+  migration and rollback compatibility
+- `uid1000-helper/`: UID-1000 presence activator, camera-indicator watchdog,
+  and guarded ART boot trampoline
 - `exploit-sentinel/`: temporary no-permission debuggable package used by the
   GhostLock scheduler trigger
 - `tools/provision_portal.py`: user-facing build, installation, retry, and
