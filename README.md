@@ -22,7 +22,7 @@ applies the features you select, then verifies them across two normal boots.
 Persistent features use focused configuration changes or small boot helpers.
 
 > [!NOTE]
-> This is not a persistent root exploit. It is a timed, surgical way to change otherwise inaccessible system settings and make the most of a Portal with Kiosk Satellite.
+> This is not a persistent root exploit. It is a timed, surgical way to change otherwise inaccessible system settings and make the most of a Portal with Kiosk Satellite. All features applied by the provisioner are persistent and survive reboots.
 
 ## What the provisioning does
 
