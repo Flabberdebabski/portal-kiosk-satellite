@@ -24,6 +24,12 @@ Persistent features use focused configuration changes or small boot helpers.
 > [!NOTE]
 > This is not a persistent root exploit. It is a timed, surgical way to change otherwise inaccessible system settings and make the most of a Portal with Kiosk Satellite. All features applied by the provisioner are persistent and survive reboots.
 
+> [!WARNING]
+> I have tried to make the provisioner as safe and guarded as possible, but
+> low-level system changes always carry a chance that something could go
+> wrong. Back up anything important and proceed only if you accept that risk.
+> You use this tool at your own risk.
+
 ## What the provisioning does
 
 | Feature | What it does and why it helps |
@@ -110,6 +116,12 @@ adb shell uname -a
 ```
 
 ## Step-by-step installation
+
+> [!WARNING]
+> I have tried to make the provisioner as safe and guarded as possible, but
+> low-level system changes always carry a chance that something could go
+> wrong. Back up anything important and proceed only if you accept that risk.
+> You use this tool at your own risk.
 
 ### 1. Install and configure the host tools
 
