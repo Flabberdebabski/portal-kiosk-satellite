@@ -65,6 +65,10 @@ All changes are persistent and survive reboots.
   camera sensor and Kiosk Satellite's independent RTSP stream at their normal
   configured frame rates. A device-local helper reapplies the cap after every
   boot and then exits.
+- **[Optional green camera-indicator control](#disable-the-green-camera-indicator):**
+  keeps the software-controlled green camera-use LED off while Kiosk Satellite
+  uses the camera, without changing camera capture, presence detection, or
+  RTSP streaming. The physical-cover indicator remains hardware-controlled.
 - **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
   installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
   manager and starts its service with Android's ADB-shell identity after every
@@ -122,10 +126,11 @@ credentials, and performs only the selected provisioning actions.
 Afterward, the device reboots normally. SELinux returns to enforcing, and the
 exploit does not install `su`, a root shell, or a general root daemon. Features
 that must survive reboot use narrowly scoped configuration files, the native
-audio watchdog, or a dedicated loopback-ADB helper installed by the privileged
-process. A successful privileged run also records wireless ADB on TCP port
-5555 in Android's persistent property store. The provisioner then checks the
-requested behavior on two distinct boots.
+audio watchdog, a dedicated loopback-ADB helper, or a narrowly scoped UID-1000
+helper hosted by an existing persistent Meta system application. A successful
+privileged run also records wireless ADB on TCP port 5555 in Android's
+persistent property store. The provisioner then checks the requested behavior
+on two distinct boots.
 
 Kernel exploitation is race-sensitive. An unsuccessful attempt may reboot or
 temporarily freeze the Portal; the provisioner retries from a clean boot. The
@@ -349,7 +354,8 @@ third-party app update actions. Add `--dhcp-dns` to use the local network's
 resolver or `--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering
 resolver. Add `--shizuku` when apps on the Portal need Shizuku's shell-level
 APIs, or `--presence-fps-cap 2` when reduced Meta analysis CPU use is more
-important than its default analysis cadence.
+important than its default analysis cadence. Add `--disable-camera-light` if
+you also want to suppress the green software-controlled camera-use indicator.
 
 The Portal will reboot several times. Leave it powered and do not close the
 terminal. For a stock Portal, also keep USB connected and follow the ADB
@@ -376,6 +382,7 @@ available rollback.
 | Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
 | Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
 | Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
+| Disable the green camera-use indicator | `--disable-camera-light` | Yes | `--restore-camera-light` |
 | Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
 | Use DNS supplied by the local network | `--dhcp-dns` | No | `--restore-privacy-dns` |
 | Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
@@ -660,6 +667,38 @@ python3 tools/provision_portal.py \
 `--restore-presence-profile` also removes the cap and helper before restoring
 the complete original presence configuration.
 
+### Disable the green camera indicator
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --disable-camera-light
+```
+
+This optional action keeps the Portal's green software-controlled camera-use
+indicator off. It does not close the camera or change Kiosk Satellite's camera,
+gesture, snapshot, presence, or RTSP behavior. The orange light shown when the
+physical camera cover is closed comes from a separate hardware path and remains
+unchanged.
+
+Meta restricts the privacy HAL's global LED reset to UID 1000. The provisioner
+installs a small native watchdog and a fingerprint-specific ART boot hook in
+Meta's persistent Platform Battery State application. On each normal boot, the
+application starts the watchdog with its existing UID 1000 and `system_app`
+SELinux domain, then continues its original startup. The watchdog reads the
+current LED state and clears it only when asserted, with a periodic fallback.
+It does not run as root, change SELinux enforcement, or replace the battery
+service. The hook uses verified executable padding and refuses to patch any ART
+layout that does not exactly match the supported firmware.
+
+The provisioner requires the watchdog to connect to the privacy service with
+UID 1000 on two separate enforcing boots. Remove the watchdog and regenerate
+the battery application's original ART cache with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-camera-light
+```
+
 ### 7. Use a filtering Private DNS resolver
 
 To resolve private LAN zones through the DNS servers advertised by the active
@@ -786,8 +825,8 @@ python3 tools/provision_portal.py \
 
 The report includes exact target support, boot and SELinux state, Kiosk
 Satellite version and Device Owner state, audio and OTA markers, debloat and
-account status, the live presence pipeline, Private DNS, Shizuku package and
-server state, and the last provisioning manifest.
+account status, the live presence pipeline, camera-indicator watchdog, Private
+DNS, Shizuku package and server state, and the last provisioning manifest.
 
 ### Dry-run planning
 
@@ -863,6 +902,8 @@ failure.
 - `helper/`: persistent native audio watchdog and the earlier helper APK
 - `shizuku-helper/`: device-local loopback-ADB launcher for Shizuku
 - `presence-helper/`: optional device-local presence-analysis FPS-cap activator
+- `uid1000-helper/`: persistent UID-1000 camera-indicator watchdog and guarded
+  ART boot trampoline
 - `exploit-sentinel/`: temporary no-permission debuggable package used by the
   GhostLock scheduler trigger
 - `tools/provision_portal.py`: user-facing build, installation, retry, and

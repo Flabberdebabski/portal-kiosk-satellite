@@ -460,33 +460,44 @@ per process and reserves its global reset for UID 1000, while SELinux blocks
 ordinary apps, AIService, and ADB shell from the HIDL service. The provider's
 relevant libraries load only from the AVB-protected vendor partition.
 
-Temporary root can change the live LED sysfs nodes, but each camera open
-reapplies the firmware brightness and there is no current boot-time root or
-writable provider hook to make the change durable. The orange indication with
-the physical cover closed is separate hardware; the kernel exposes no orange
-LED control. The provisioner therefore does not offer a camera-light option.
+The `--disable-camera-light` action now installs a resident UID-1000 watchdog
+that connects through Meta's own `PrivacyStateClient`, observes the aggregate
+LED state, and calls the privileged global `clearLed()` operation whenever the
+green vote is asserted. A low-frequency fallback repairs missed state changes.
+The watchdog suppresses the client library's unconditional per-poll log lines;
+its measured steady-state CPU use was 0.1% immediately after verification.
+
+The orange indication with the physical cover closed is a separate hardware
+path. The kernel exposes no orange LED output, so this action intentionally
+does not affect it. Restore the green software indicator with
+`--restore-camera-light`.
 
 ## UID-1000 boot hook result
 
-The firmware starts several Meta applications as UID 1000, including
-Platform Secure State, Platform Battery State, Virtual Camera Manager, and
-other boot receivers. An audit of all 15 Meta UID-1000 APKs found no writable
-dynamic-code or native-library load point in their boot paths. They are
-non-debuggable and signed with Meta's production platform certificate, so the
-provisioner cannot replace or update them with its own code.
+The firmware starts Meta's Platform Battery State application persistently as
+UID 1000 in the `system_app` SELinux domain. The provisioner first asks Android
+to compile that exact package with the `speed` filter, then validates the OAT
+version, method prologue, executable-segment sizes, and zero-filled executable
+padding for the supported firmware. Temporary root copies the watchdog to a
+root-owned data directory and writes a small AArch64 trampoline into that
+padding. The trampoline runs from `PlatformBatteryStateApp.onCreate()`, forks
+and executes the watchdog, replays the displaced instruction, and returns to
+the original application startup. It does not replace an APK, alter its
+signature, modify a verified partition, or leave root running.
 
-The exported Wi-Fi Diagnostics service does contain a command runner, but all
-reachable commands are fixed by the APK and its `network_stack` SELinux domain
-cannot call the privacy HAL. Platform Secure State has the required UID and
-SELinux domain, but its Binder API does not expose the HAL's global LED reset.
-No supported data-only UID-1000 boot hook is therefore available. Compiled ART
-cache substitution has not been accepted as a persistence route because it is
-firmware-specific, checksum-sensitive, and can be discarded by dexopt.
+The battery service remained registered and `dumpsys battery` continued to
+work after installation. On verification boots
+`fd9775bf-84e5-4e5f-b8e9-90e5de17627d` and
+`d82d87b3-eaaa-4cc0-bc84-b4af86874b33`, the child ran with real and effective
+UID/GID 1000, zero Linux capabilities, seccomp enabled, and SELinux enforcing.
+The host application retained its original process and Binder service. The
+rollback removes the helper and regenerates the application's original ART
+cache with Android's compiler.
 
-Even a one-shot UID-1000 command at boot would not keep the green camera light
-off: the native camera provider adds a new vote whenever camera 0 opens. A
-working implementation would need a resident allowed-domain client that
-clears each new vote or an interception inside the provider itself.
+This is a narrowly scoped UID-1000 execution hook, not persistent root. The
+same ART approach remains exact-firmware-specific and should only host helpers
+whose required permissions and SELinux access are already available to that
+system application.
 
 ## Account-free Kiosk Satellite home
 

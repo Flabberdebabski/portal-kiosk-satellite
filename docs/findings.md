@@ -2030,10 +2030,45 @@ Meta's private platform-signing key. Poisoning compiled ART cache files remains
 a firmware-specific, checksum-sensitive research idea rather than a verified
 or supportable persistence mechanism.
 
-Current result: the firmware already has suitable UID-1000 processes at boot,
+Result at this stage: the firmware already has suitable UID-1000 processes at boot,
 but no writable path was found for making one execute provisioner-controlled
 code. A safe persistent hook still requires a separate code-loading or
 confused-deputy vulnerability, Meta's platform key, or control of the verified
 system/boot chain. For camera-light control the hook would also have to react
 after every camera-provider vote; a one-time boot call would be overwritten
 when camera 0 opens.
+
+168. Follow-up ART-cache testing established a guarded UID-1000 boot hook on
+the exact supported Portal Go firmware. Android's `speed` compiler produces a
+stable OAT v170 file for the persistent Platform Battery State application.
+`PlatformBatteryStateApp.onCreate()` starts at file offset `0xb7c0`, and the
+last executable page contains zero padding beginning at `0x21400`. Extending
+the executable program segment from `0x1937c` to `0x194d8` maps a 213-byte
+AArch64 trampoline in that padding without replacing a compiled Java method.
+The installer checks all of those values, the original four-byte method
+prologue, and the zero padding before writing anything.
+
+The trampoline preserves the managed quick-ABI registers and NZCV flags,
+forks, executes `/data/portal-uid1000/portal-camera-led-watch` in the child,
+replays the displaced instruction, and resumes the original `onCreate()` in
+the parent. The host application remains UID 1000 in `system_app`; its battery
+Binder service stayed registered and functional. The watchdog inherited UID
+and GID 1000 with no Linux capabilities, seccomp enabled, and SELinux
+enforcing. It connected to Meta's privacy HAL on two ordinary boots,
+`fd9775bf-84e5-4e5f-b8e9-90e5de17627d` and
+`d82d87b3-eaaa-4cc0-bc84-b4af86874b33`.
+
+The watchdog polls `PrivacyStateClient::getLed()` and invokes the UID-1000-only
+global `clearLed()` when a green camera vote is present, plus a periodic
+fallback. Meta's client library logs every query at error/info priority, so the
+watchdog patches that library's own `__android_log_print` PLT slot in its
+private process to suppress only `PrivacyStateClient` messages. Other clients
+and the watchdog's lifecycle logs are unaffected. Steady-state watchdog CPU
+was 0.1% after verification. The orange physical-cover indicator remains
+outside this software path.
+
+`--disable-camera-light` installs and verifies the helper across two enforcing
+boots. `--restore-camera-light` removes it and regenerates the original ART
+cache. This result does not provide persistent root: it is a constrained,
+firmware-specific UID-1000 hook whose SELinux domain still limits what future
+helpers can do.

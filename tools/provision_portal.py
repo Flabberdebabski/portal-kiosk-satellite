@@ -123,6 +123,22 @@ CAMERA_SERVICE_COMPONENT = (
     "com.facebook.portal.aiservice/"
     "com.facebook.alohaapp.app.services.CameraService"
 )
+OTA_UI_PACKAGE = "com.facebook.aloha.otaui"
+OTA_SETUP_PACKAGE = "com.facebook.aloha.alohaotasetup"
+BATTERY_STATE_PACKAGE = "com.facebook.alohasdk.platformbatterystate"
+CAMERA_LIGHT_HELPER_LOCAL = (
+    ROOT / "uid1000-helper/build/portal-camera-led-watch"
+)
+CAMERA_LIGHT_HOOK_LOCAL = ROOT / "uid1000-helper/build/portal-uid1000-hook.bin"
+CAMERA_LIGHT_HELPER_REMOTE = "/data/local/tmp/portal-camera-led-watch"
+CAMERA_LIGHT_HOOK_REMOTE = "/data/local/tmp/portal-uid1000-hook.bin"
+CAMERA_LIGHT_INSTALLED_REMOTE = (
+    "/data/local/tmp/portal-camera-light-backup/installed-v1"
+)
+CAMERA_LIGHT_RESTORED_REMOTE = (
+    "/data/local/tmp/portal-camera-light-backup/restored-v1"
+)
+CAMERA_LIGHT_HELPER_INSTALLED = "/data/portal-uid1000/portal-camera-led-watch"
 
 
 class ProvisionError(RuntimeError):
@@ -156,6 +172,8 @@ class PortalProvisioner:
         restore_app_verifier: bool = False,
         shizuku: bool = False,
         remove_shizuku: bool = False,
+        disable_camera_light: bool = False,
+        restore_camera_light: bool = False,
         shizuku_apk: pathlib.Path | None = None,
         status_only: bool = False,
         dry_run: bool = False,
@@ -188,6 +206,8 @@ class PortalProvisioner:
         self.restore_app_verifier = restore_app_verifier
         self.shizuku = shizuku
         self.remove_shizuku = remove_shizuku
+        self.disable_camera_light = disable_camera_light
+        self.restore_camera_light = restore_camera_light
         self.shizuku_apk = shizuku_apk
         self.shizuku_public_key: pathlib.Path | None = None
         self.presence_public_key: pathlib.Path | None = None
@@ -347,6 +367,13 @@ class PortalProvisioner:
             if self.presence_public_key is None:
                 raise ProvisionError("presence helper key was not prepared")
             files.append((self.presence_public_key, PRESENCE_KEY_REMOTE))
+        if self.disable_camera_light:
+            files.extend(
+                (
+                    (CAMERA_LIGHT_HELPER_LOCAL, CAMERA_LIGHT_HELPER_REMOTE),
+                    (CAMERA_LIGHT_HOOK_LOCAL, CAMERA_LIGHT_HOOK_REMOTE),
+                )
+            )
         for local, remote in files:
             if not local.is_file() or local.stat().st_size == 0:
                 raise ProvisionError(f"missing build output: {local}")
@@ -368,6 +395,11 @@ class PortalProvisioner:
             staged += f" shizuku_key={SHIZUKU_KEY_REMOTE}"
         if self.presence_fps_cap is not None:
             staged += f" presence_key={PRESENCE_KEY_REMOTE}"
+        if self.disable_camera_light:
+            staged += (
+                f" camera_light_helper={CAMERA_LIGHT_HELPER_REMOTE}"
+                f" camera_light_hook={CAMERA_LIGHT_HOOK_REMOTE}"
+            )
         print(f"STAGED {staged}")
 
     def requested_actions(self) -> dict[str, object]:
@@ -392,6 +424,8 @@ class PortalProvisioner:
             "restore_app_verifier",
             "shizuku",
             "remove_shizuku",
+            "disable_camera_light",
+            "restore_camera_light",
         ):
             if getattr(self, name):
                 actions[name] = True
@@ -429,6 +463,8 @@ class PortalProvisioner:
             candidates.append(SHIZUKU_HELPER_LOCAL)
             if self.shizuku_apk:
                 candidates.append(self.shizuku_apk)
+        if self.disable_camera_light:
+            candidates.extend((CAMERA_LIGHT_HELPER_LOCAL, CAMERA_LIGHT_HOOK_LOCAL))
         hashes: dict[str, str] = {}
         for path in candidates:
             if path.is_file():
@@ -636,11 +672,29 @@ class PortalProvisioner:
         package_verifier_setting = shell(
             "settings", "get", "global", "package_verifier_enable", timeout=5
         )
-        process_list = shell("ps", "-A")
+        process_list = shell("ps", "-A", "-o", "USER,PID,PPID,NAME,ARGS")
         shizuku_process = next(
             (line for line in process_list.splitlines() if "shizuku_server" in line),
             "",
         )
+        camera_light_process = next(
+            (
+                line
+                for line in process_list.splitlines()
+                if "portal-camera-led-watch" in line
+                or "portal-led-watc" in line
+            ),
+            "",
+        )
+        camera_light_host_process = next(
+            (
+                line
+                for line in process_list.splitlines()
+                if BATTERY_STATE_PACKAGE in line
+            ),
+            "",
+        )
+        camera_light_installed = exists(CAMERA_LIGHT_INSTALLED_REMOTE)
         return {
             "schema": 1,
             "serial": self.serial,
@@ -693,10 +747,7 @@ class PortalProvisioner:
                     or (
                         all(
                             package in disabled
-                            for package in (
-                                "com.facebook.aloha.otaui",
-                                "com.facebook.aloha.alohaotasetup",
-                            )
+                            for package in (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
                         )
                         and "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
                     )
@@ -707,10 +758,7 @@ class PortalProvisioner:
                 "installed_marker": ota_installed,
                 "packages_disabled": all(
                     package in disabled
-                    for package in (
-                        "com.facebook.aloha.otaui",
-                        "com.facebook.aloha.alohaotasetup",
-                    )
+                    for package in (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
                 ),
                 "firmware_gate_false": (
                     "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
@@ -839,6 +887,29 @@ class PortalProvisioner:
                     shizuku_process.split()[0] if shizuku_process else None
                 ),
             },
+            "camera_light": {
+                "state": (
+                    "installed"
+                    if camera_light_installed
+                    else "restored"
+                    if exists(CAMERA_LIGHT_RESTORED_REMOTE)
+                    else "unknown"
+                ),
+                "installed_marker": exists(CAMERA_LIGHT_INSTALLED_REMOTE),
+                "restored_marker": exists(CAMERA_LIGHT_RESTORED_REMOTE),
+                "helper_present": exists(CAMERA_LIGHT_HELPER_INSTALLED),
+                "watchdog_running": bool(camera_light_process),
+                "watchdog_user": (
+                    camera_light_process.split()[0]
+                    if camera_light_process
+                    else None
+                ),
+                "persistent_host_running": bool(camera_light_host_process),
+                "persistent_host_package": BATTERY_STATE_PACKAGE,
+                "connected_this_boot": (
+                    "watchdog connected uid=1000" in logs
+                ),
+            },
             "provision_manifest": manifest,
         }
 
@@ -867,6 +938,8 @@ class PortalProvisioner:
                 self.restore_presence_fps,
                 self.shizuku,
                 self.remove_shizuku,
+                self.disable_camera_light,
+                self.restore_camera_light,
             )
         )
 
@@ -881,6 +954,7 @@ class PortalProvisioner:
         privacy = status.get("privacy_dns", {})
         app_updates = status.get("app_updates", {})
         shizuku = status.get("shizuku", {})
+        camera_light = status.get("camera_light", {})
         current = {
             "audio": audio.get("state") if isinstance(audio, dict) else None,
             "device_owner": (
@@ -898,6 +972,9 @@ class PortalProvisioner:
             "privacy_dns": privacy if isinstance(privacy, dict) else None,
             "app_updates": app_updates if isinstance(app_updates, dict) else None,
             "shizuku": shizuku if isinstance(shizuku, dict) else None,
+            "camera_light": (
+                camera_light if isinstance(camera_light, dict) else None
+            ),
         }
         required_outputs = []
         if self.target:
@@ -920,6 +997,10 @@ class PortalProvisioner:
             required_outputs.append(str(SHIZUKU_HELPER_LOCAL))
         if self.presence_fps_cap is not None:
             required_outputs.append(str(PRESENCE_HELPER_LOCAL))
+        if self.disable_camera_light:
+            required_outputs.extend(
+                (str(CAMERA_LIGHT_HELPER_LOCAL), str(CAMERA_LIGHT_HOOK_LOCAL))
+            )
         report = {
             "actions": actions,
             "current": current,
@@ -1602,6 +1683,8 @@ class PortalProvisioner:
                 DEBLOAT_COMPONENT_ACTIONS_REMOTE,
                 SHIZUKU_KEY_REMOTE,
                 PRESENCE_KEY_REMOTE,
+                CAMERA_LIGHT_HELPER_REMOTE,
+                CAMERA_LIGHT_HOOK_REMOTE,
             ],
             timeout=10,
         )
@@ -1638,6 +1721,8 @@ class PortalProvisioner:
             "restore_app_verifier",
             "shizuku",
             "remove_shizuku",
+            "disable_camera_light",
+            "restore_camera_light",
         }
         for name, value in actions.items():
             if name not in allowed:
@@ -2131,6 +2216,10 @@ class PortalProvisioner:
             environment["GHOSTLOCK_SHIZUKU_AUTHORIZE_KEY"] = "1"
         if self.remove_shizuku:
             environment["GHOSTLOCK_SHIZUKU_REMOVE_KEY"] = "1"
+        if self.disable_camera_light:
+            environment["GHOSTLOCK_DISABLE_CAMERA_LIGHT"] = "1"
+        if self.restore_camera_light:
+            environment["GHOSTLOCK_RESTORE_CAMERA_LIGHT"] = "1"
         self.adb_run(
             ["shell", "am", "force-stop", "--user", "0", "com.facebook.aloha.analytics"],
             timeout=10,
@@ -2229,6 +2318,20 @@ class PortalProvisioner:
         if self.remove_shizuku:
             expected_markers["shizuku_key_remove"] = (
                 "Shizuku ADB key remove",
+                True,
+            )
+        if self.disable_camera_light:
+            expected_markers["camera_light_helper"] = (
+                "UID1000 camera LED helper install",
+                True,
+            )
+            expected_markers["camera_light_hook"] = (
+                "Battery ART boot hook",
+                True,
+            )
+        if self.restore_camera_light:
+            expected_markers["camera_light_restore"] = (
+                "UID1000 camera LED helper restore",
                 True,
             )
         observed_markers: set[str] = set()
@@ -2488,10 +2591,11 @@ class PortalProvisioner:
         )
 
     def disable_ota_packages(self) -> None:
-        for package in (
-            "com.facebook.aloha.otaui",
-            "com.facebook.aloha.alohaotasetup",
-        ):
+        packages = (
+            OTA_UI_PACKAGE,
+            OTA_SETUP_PACKAGE,
+        )
+        for package in packages:
             result = self.adb_run(
                 ["shell", "pm", "disable-user", "--user", "0", package],
                 timeout=10,
@@ -2509,8 +2613,8 @@ class PortalProvisioner:
 
     def enable_ota_packages(self) -> None:
         for package in (
-            "com.facebook.aloha.otaui",
-            "com.facebook.aloha.alohaotasetup",
+            OTA_UI_PACKAGE,
+            OTA_SETUP_PACKAGE,
         ):
             result = self.adb_run(
                 ["shell", "pm", "enable", "--user", "0", package], timeout=10
@@ -2531,8 +2635,8 @@ class PortalProvisioner:
         still_disabled = [
             package
             for package in (
-                "com.facebook.aloha.otaui",
-                "com.facebook.aloha.alohaotasetup",
+                OTA_UI_PACKAGE,
+                OTA_SETUP_PACKAGE,
             )
             if f"package:{package}" in disabled
         ]
@@ -2548,11 +2652,12 @@ class PortalProvisioner:
             timeout=10,
             check=True,
         ).stdout
-        required = (
-            "com.facebook.aloha.otaui",
-            "com.facebook.aloha.alohaotasetup",
-        )
-        missing = [package for package in required if f"package:{package}" not in disabled]
+        required = (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        missing = [
+            package
+            for package in required
+            if f"package:{package}" not in disabled
+        ]
         if missing:
             raise ProvisionError(f"OTA packages became enabled: {', '.join(missing)}")
 
@@ -2589,6 +2694,46 @@ class PortalProvisioner:
             + "\n"
             + last_log[-3000:]
         )
+
+    def compile_camera_light_host_speed(self) -> None:
+        self.adb_run(
+            ["shell", "am", "force-stop", "--user", "0", BATTERY_STATE_PACKAGE],
+            timeout=10,
+        )
+        result = self.adb_run(
+            [
+                "shell",
+                "cmd",
+                "package",
+                "compile",
+                "-f",
+                "-m",
+                "speed",
+                BATTERY_STATE_PACKAGE,
+            ],
+            timeout=120,
+        )
+        if result.returncode != 0 or "Success" not in result.stdout:
+            raise ProvisionError(
+                "could not generate the guarded battery-service ART cache: "
+                + result.stdout
+            )
+        print(
+            "CAMERA_LIGHT_ART_CACHE_OK host=platformbatterystate "
+            "compiler_filter=speed"
+        )
+
+    def prepare_camera_light_install(self) -> None:
+        installed, _ = self.package_sets()
+        if BATTERY_STATE_PACKAGE not in installed:
+            raise ProvisionError(
+                f"required persistent system package is absent: {BATTERY_STATE_PACKAGE}"
+            )
+        self.compile_camera_light_host_speed()
+
+    def restore_camera_light_package_state(self) -> None:
+        self.compile_camera_light_host_speed()
+        print("CAMERA_LIGHT_BOOT_HOOK_RESTORED host=platformbatterystate")
 
     def package_sets(self) -> tuple[set[str], set[str]]:
         installed_result = self.adb_run(
@@ -3325,6 +3470,77 @@ class PortalProvisioner:
             self.verify_shizuku()
         if self.remove_shizuku:
             self.verify_shizuku_removed()
+        if self.disable_camera_light:
+            self.verify_camera_light_disabled()
+        if self.restore_camera_light:
+            self.verify_camera_light_restored()
+
+    def verify_camera_light_disabled(self, wait_seconds: int = 35) -> None:
+        if self.adb_run(
+            ["shell", "test", "-f", CAMERA_LIGHT_INSTALLED_REMOTE], timeout=5
+        ).returncode != 0:
+            raise ProvisionError("camera-light install marker is absent")
+        if self.adb_run(
+            ["shell", "test", "-x", CAMERA_LIGHT_HELPER_INSTALLED], timeout=5
+        ).returncode != 0:
+            raise ProvisionError("camera-light watchdog executable is absent")
+        deadline = time.monotonic() + wait_seconds
+        last_process = ""
+        last_logs = ""
+        while time.monotonic() < deadline:
+            processes = self.adb_run(
+                ["shell", "ps", "-A", "-o", "USER,PID,PPID,NAME,ARGS"],
+                timeout=10,
+                check=True,
+            ).stdout
+            last_process = next(
+                (
+                    line
+                    for line in processes.splitlines()
+                    if "portal-camera-led-watch" in line
+                    or "portal-led-watc" in line
+                ),
+                "",
+            )
+            last_logs = self.adb_run(
+                ["shell", "logcat", "-d", "-s", "PortalCameraLed:*"],
+                timeout=10,
+            ).stdout
+            if last_process and "watchdog connected uid=1000" in last_logs:
+                selinux = self.adb_run(
+                    ["shell", "getenforce"], timeout=5, check=True
+                ).stdout.strip()
+                if selinux != "Enforcing":
+                    raise ProvisionError(f"SELinux is not enforcing: {selinux!r}")
+                print(
+                    "CAMERA_LIGHT_OK watchdog_uid=1000 "
+                    "host=platformbatterystate trigger=persistent_app "
+                    "selinux=Enforcing"
+                )
+                return
+            time.sleep(2)
+        raise ProvisionError(
+            "camera-light UID-1000 watchdog did not start and connect; "
+            f"process={last_process!r} logs={last_logs[-2000:]!r}"
+        )
+
+    def verify_camera_light_restored(self) -> None:
+        if self.adb_run(
+            ["shell", "test", "-f", CAMERA_LIGHT_RESTORED_REMOTE], timeout=5
+        ).returncode != 0:
+            raise ProvisionError("camera-light restore marker is absent")
+        if self.adb_run(
+            ["shell", "test", "-e", CAMERA_LIGHT_HELPER_INSTALLED], timeout=5
+        ).returncode == 0:
+            raise ProvisionError("camera-light watchdog executable remains installed")
+        processes = self.adb_run(
+            ["shell", "ps", "-A", "-o", "USER,PID,PPID,NAME,ARGS"],
+            timeout=10,
+            check=True,
+        ).stdout
+        if "portal-camera-led-watch" in processes or "portal-led-watc" in processes:
+            raise ProvisionError("camera-light watchdog remains running")
+        print("CAMERA_LIGHT_RESTORE_OK helper=absent art_cache=restored")
 
     def verify_across_two_reboots(self, first_boot: str | None = None) -> None:
         if first_boot is None:
@@ -3387,6 +3603,8 @@ class PortalProvisioner:
             self.apply_debloat()
         if self.restore_bloat:
             self.restore_debloat()
+        if self.disable_camera_light:
+            self.prepare_camera_light_install()
         if self.disable_updates:
             self.disable_ota_packages()
         if self.privacy_dns:
@@ -3427,6 +3645,8 @@ class PortalProvisioner:
             or (self.remove_meta_accounts and not already_meta_clean)
             or self.shizuku
             or self.remove_shizuku
+            or self.disable_camera_light
+            or self.restore_camera_light
         )
         if not privileged_action:
             if self.kiosk_home:
@@ -3436,12 +3656,12 @@ class PortalProvisioner:
             self.verify_across_two_reboots()
             return
 
-        self.persist_wireless_adb = True
         persistent_port = self.adb_run(
             ["shell", "getprop", "persist.adb.tcp.port"],
             timeout=5,
             check=True,
         ).stdout.strip()
+        self.persist_wireless_adb = persistent_port != "5555"
         if persistent_port != "5555":
             print(
                 "STOCK_ADB_REENABLE_REQUIRED persistent_port=unset\n"
@@ -3466,6 +3686,7 @@ class PortalProvisioner:
                 ),
                 build_shizuku=self.shizuku,
                 build_presence=self.presence_fps_cap is not None,
+                build_uid1000=self.disable_camera_light,
                 build_sentinel=True,
             )
         if self.shizuku:
@@ -3519,6 +3740,8 @@ class PortalProvisioner:
                     self.configure_kiosk_home(enabled=True)
                 if self.restore_kiosk_home:
                     self.configure_kiosk_home(enabled=False)
+                if self.restore_camera_light:
+                    self.restore_camera_light_package_state()
                 self.verify_across_two_reboots(first_boot=post_attempt_boot)
                 return
         finally:
@@ -3534,6 +3757,7 @@ def build(
     build_components: bool,
     build_shizuku: bool,
     build_presence: bool,
+    build_uid1000: bool,
     build_sentinel: bool,
 ) -> None:
     if target is None:
@@ -3551,6 +3775,8 @@ def build(
         commands.append(["make", "-C", str(ROOT / "shizuku-helper"), "all"])
     if build_presence:
         commands.append(["make", "-C", str(ROOT / "presence-helper"), "all"])
+    if build_uid1000:
+        commands.append(["make", "-C", str(ROOT / "uid1000-helper"), "all"])
     if build_sentinel:
         commands.append(["make", "-C", str(ROOT / "exploit-sentinel"), "all"])
     for command in commands:
@@ -3665,6 +3891,24 @@ def parse_args() -> argparse.Namespace:
         "--enable-updates",
         action="store_true",
         help="restore the original MobileConfig override and re-enable OTA packages",
+    )
+    camera_light_group = parser.add_mutually_exclusive_group()
+    camera_light_group.add_argument(
+        "--disable-camera-light",
+        action="store_true",
+        help=(
+            "install a persistent UID-1000 watchdog that clears the green "
+            "software-controlled camera indicator; the orange physical-cover "
+            "light is hardware-controlled"
+        ),
+    )
+    camera_light_group.add_argument(
+        "--restore-camera-light",
+        action="store_true",
+        help=(
+            "remove the camera-light watchdog and boot hook, then restore "
+            "the battery service's original ART cache"
+        ),
     )
     debloat_group = parser.add_mutually_exclusive_group()
     debloat_group.add_argument(
@@ -3840,6 +4084,8 @@ def parse_args() -> argparse.Namespace:
             args.restore_app_verifier,
             args.shizuku,
             args.remove_shizuku,
+            args.disable_camera_light,
+            args.restore_camera_light,
         )
     )
     if args.shizuku_apk and not args.shizuku:
@@ -3891,6 +4137,8 @@ def main() -> int:
             restore_app_verifier=args.restore_app_verifier,
             shizuku=args.shizuku,
             remove_shizuku=args.remove_shizuku,
+            disable_camera_light=args.disable_camera_light,
+            restore_camera_light=args.restore_camera_light,
             shizuku_apk=args.shizuku_apk,
             status_only=args.status or args.backup_only,
             dry_run=args.dry_run,
