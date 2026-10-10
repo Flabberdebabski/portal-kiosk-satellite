@@ -26,6 +26,17 @@ from portal_targets import PortalTarget, find_target
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+PROJECT_URL = "https://github.com/jxlarrea/portal-root-kiosk-satellite"
+PROVISIONER_BANNER = rf"""
++----------------------------------------------------------------+
+|                                                                |
+|          Meta Portal Provisioner for Kiosk Satellite           |
+|                                                                |
+|                    Created by Xavier Larrea                    |
+|    {PROJECT_URL}     |
+|                                                                |
++----------------------------------------------------------------+
+""".strip()
 HELPER_LOCAL = ROOT / "helper/build/libportal_audio_persist.so"
 PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
@@ -148,6 +159,10 @@ UID1000_HOOK_ACTIVE_REMOTE = (
 
 class ProvisionError(RuntimeError):
     pass
+
+
+def print_banner() -> None:
+    print(PROVISIONER_BANNER, file=sys.stderr, flush=True)
 
 
 class PortalProvisioner:
@@ -4245,6 +4260,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    print_banner()
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir = args.log_dir or pathlib.Path(f"/tmp/portal-provision-{stamp}")
     log_dir.mkdir(parents=True, exist_ok=True)
