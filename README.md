@@ -14,164 +14,67 @@ experience with <a href="https://github.com/jxlarrea/kiosk-satellite">Kiosk Sate
 All changes are persistent and survive reboots.
 </p>
 
-## What the provisioning does:
+## Overview
 
-- **[Temporary, scoped root provisioning](#how-the-root-exploit-works):**
-  performs otherwise inaccessible system changes, then reboots normally with
-  SELinux enforcing instead of leaving a general root daemon running.
-- **[Persistent wireless ADB](#4-connect-to-the-portal):** converts the
-  stock, current-boot-only wireless ADB setting to TCP port 5555 during the
-  first successful root-backed provisioning run. Later reboots reconnect
-  without repeating the USB setup, which also lets verification and the
-  device-local Shizuku launcher run unattended.
-- **[Complete kiosk profile](#6-run-the-provisioner):** applies the tested
-  audio, Device Owner, update-blocking, debloat, account-removal, and presence
-  settings plus third-party app updates with one command, reducing setup time
-  and configuration mistakes.
-- **[System-wide hardware AEC and noise-suppression control](#1-disable-hardware-echo-cancellation-and-noise-suppression):**
-  stops the Portal's voice DSP from suppressing microphone input while its
-  speakers play, improving simultaneous playback and listening for every
-  Android app. The paired rollback restores Meta's original loader and
-  processing defaults.
-- **[Kiosk Satellite Device Owner provisioning](#2-make-kiosk-satellite-the-device-owner):**
-  grants Android's strongest kiosk policy role so Kiosk Satellite can manage
-  the device more reliably than an ordinary device-admin app.
-- **[Persistent Kiosk Satellite home screen](#use-kiosk-satellite-as-the-home-screen):**
-  makes Kiosk Satellite the Android HOME app so it starts at boot, receives
-  every Home press, and prevents Meta's obsolete account-error screen from
-  taking focus. Kiosk Satellite's crash-loop fuse provides automatic recovery.
-- **[Automatic firmware-update blocking](#3-disable-automatic-meta-firmware-updates):**
-  keeps an abandoned Portal on its known compatible build and prevents an
-  unexpected Meta update from breaking provisioning. The paired rollback
-  restores the original OTA configuration and packages.
-- **[Conservative Meta app debloat](#4-disable-unused-meta-applications):**
-  disables six unused communication, feed, display, contact, and telemetry
-  packages plus 196 cloud-facing MQTT, Firebase, diagnostics, bug-reporting,
-  push, analytics, and background-worker components. This reduces wakeups and
-  background work while retaining camera, presence, media, WebView, and kiosk
-  services. Its rollback restores every saved package and component state.
-- **[Local Meta-account removal](#5-remove-local-meta-accounts):** removes
-  obsolete Portal identity data and prevents its authenticators from
-  recreating those accounts, improving privacy without disabling the shared
-  services used by the camera and configuration stack.
-- **[Presence-pipeline optimization](#6-reduce-aiservice-cpu-use-while-preserving-presence-detection):**
-  disables optional Smart Camera segmentation, liveness, and re-identification
-  workloads while locking the analysis pipeline to the full camera field of
-  view and retaining the LED-free person-detection log consumed by Kiosk
-  Satellite. The tested profile reduces AIService CPU use and includes an
-  exact rollback.
-- **[Optional presence-analysis frame-rate cap](#optional-presence-analysis-frame-rate-cap):**
-  limits Meta's pose-analysis callback to a selected rate while leaving the
-  camera sensor and Kiosk Satellite's independent RTSP stream at their normal
-  configured frame rates. A device-local helper reapplies the cap after every
-  boot and then exits.
-- **[Optional green camera-indicator control](#disable-the-green-camera-indicator):**
-  keeps the software-controlled green camera-use LED off while Kiosk Satellite
-  uses the camera, without changing camera capture, presence detection, or
-  RTSP streaming. The physical-cover indicator remains hardware-controlled.
-- **[Device-local Shizuku startup](#9-install-shizuku-with-automatic-startup):**
-  installs the official [Shizuku](https://github.com/RikkaApps/Shizuku)
-  manager and starts its service with Android's ADB-shell identity after every
-  reboot, giving compatible apps privileged APIs without rerunning the root
-  exploit or leaving another computer online.
-- **[Persistent third-party app updates](#8-allow-kiosk-satellite-and-third-party-app-updates):**
-  turns off Meta's obsolete certificate allowlist so Kiosk Satellite and other
-  non-Meta apps can update through Android, Device Owner, an update helper, or
-  Shizuku while Android still enforces package signatures and downgrade rules.
-- **[Filtering Private DNS](#7-use-a-filtering-private-dns-resolver):** routes
-  DNS through a user-selected DNS-over-TLS resolver, allowing unwanted Meta
-  endpoints to be filtered without modifying system certificates or
-  installing a broad root firewall. The original DNS settings can be restored.
-- **[Network-provided DNS](#7-use-a-filtering-private-dns-resolver):** disables
-  Android's opportunistic Private DNS mode so local zones resolve through the
-  DNS servers supplied by DHCP or IPv6 router advertisements. This is useful
-  for Home Assistant and other services with private LAN hostnames.
-- **[Read-only device status](#status-report):** reports target compatibility,
-  SELinux, Kiosk Satellite, Device Owner, audio, OTA, debloat, account,
-  presence, DNS, third-party app updates, Shizuku, and provisioning-manifest
-  state without exploiting or rebooting the device.
-- **[Dry-run planning](#dry-run-planning):** previews actions, required
-  binaries and host tools, exploit use, reboot count, and current state without
-  changing the Portal.
-- **[Private backup bundles](#backup-bundles):** saves diagnostics and
-  reversible configuration snapshots in a mode-0600 archive with SHA-256
-  hashes, making maintenance and rollback evidence easier to preserve.
-- **[Interrupted-run recovery](#interrupted-run-recovery):** records pending
-  work on the Portal, removes stale staged files, and safely resumes the
-  validated action set after a host failure or power interruption.
-- **[Exact model and firmware safeguards](#supported-models):** matches both
-  the device codename and complete firmware fingerprint before any kernel
-  write, preventing offsets for one Portal build from being used on another.
-- **[Automatic retry and two-boot verification](#running-and-troubleshooting):**
-  retries race-sensitive exploit attempts from clean boots and accepts changes
-  only after their requested behavior passes on two distinct normal boots.
+The provisioner checks that the connected Portal has an exact supported model
+and firmware build, briefly uses a root exploit during a controlled reboot,
+applies the features you select, then verifies them across two normal boots.
+Persistent features use focused configuration changes or small boot helpers.
 
-Support is intentionally build-specific. One Portal Go firmware is currently
-supported; the repository is organized so more Portal models and firmware
-builds can be added as their kernel layouts and system services are verified.
+> [!NOTE]
+> This is not a persistent root exploit. It is a timed, surgical way to change otherwise inaccessible system settings and make the most of a Portal with Kiosk Satellite.
 
-## How the root exploit works
+## What the provisioning does
 
-The project adapts GhostLock,
-[CVE-2026-43499](https://www.cve.org/CVERecord?id=CVE-2026-43499), to a
-specific Portal kernel. The host provisioner confirms the device model and full
-firmware fingerprint, reboots into a clean state, derives the randomized kernel
-addresses for that boot, and installs a tiny temporary debuggable package used
-as the exploit's Android scheduler waiter. The provisioner verifies `run-as`
-before the first reboot, starts the exploit through a staged native library,
-and removes the temporary package when the attempt sequence finishes. The
-exploit obtains temporary kernel read/write access, gives its own process root
-credentials, and performs only the selected provisioning actions.
-
-Afterward, the device reboots normally. SELinux returns to enforcing, and the
-exploit does not install `su`, a root shell, or a general root daemon. Features
-that must survive reboot use narrowly scoped configuration files, the native
-audio watchdog, a dedicated loopback-ADB helper, or a narrowly scoped UID-1000
-helper hosted by an existing persistent Meta system application. A successful
-privileged run also records wireless ADB on TCP port 5555 in Android's
-persistent property store. The provisioner then checks the requested behavior
-on two distinct boots.
-
-Kernel exploitation is race-sensitive. An unsuccessful attempt may reboot or
-temporarily freeze the Portal; the provisioner retries from a clean boot. The
-tool refuses to run its build-specific kernel writes if the model or firmware
-fingerprint does not match a supported target. On unprovisioned stock firmware,
-ADB must be re-enabled manually after each clean or failed-attempt reboot until
-the first exploit attempt succeeds.
+| Feature | What it does and why it helps |
+| --- | --- |
+| [Temporary root provisioning](#how-the-root-exploit-works) | Opens a short privileged window for selected changes, then returns the Portal to normal enforcing mode. |
+| [Persistent wireless ADB](#connect-to-the-portal) | Keeps ADB available on port 5555 after setup, so future reboots no longer require USB activation. |
+| [Complete kiosk profile](#run-the-provisioner) | Applies the recommended Kiosk Satellite setup with one command. |
+| [Hardware audio processing control](#disable-hardware-echo-cancellation-and-noise-suppression) | Stops the Portal from suppressing microphone audio while its speaker is playing audio or music. |
+| [Kiosk Satellite Device Owner](#make-kiosk-satellite-the-device-owner) | Gives Kiosk Satellite Android's strongest kiosk-management role. |
+| [Persistent Kiosk Satellite home](#use-kiosk-satellite-as-the-home-screen) | Starts Kiosk Satellite at boot and keeps obsolete Meta screens out of the way. |
+| [Firmware-update blocking](#disable-automatic-meta-firmware-updates) | Prevents an unexpected Meta update from breaking a known working setup. |
+| [Meta app debloat](#disable-unused-meta-applications) | Reduces background work from unused Meta apps, cloud clients and diagnostics. |
+| [Meta-account removal](#remove-local-meta-accounts) | Removes obsolete local account data while retaining services needed by the camera and Portal. |
+| [Presence optimization](#reduce-aiservice-cpu-use-while-preserving-presence-detection) | Lowers AIService CPU use while preserving full-view, LED-free person detection. |
+| [Presence frame-rate cap](#optional-presence-analysis-frame-rate-cap) | Further reduces analysis work without limiting Kiosk Satellite's RTSP frame rate. |
+| [Green camera-indicator control](#disable-the-green-camera-indicator) | Suppresses the software-controlled bright green camera light while leaving camera features active. |
+| [Filtering Private DNS](#configure-dns) | Sends DNS to a chosen DNS-over-TLS resolver for network-level filtering. |
+| [Network-provided DNS](#configure-dns) | Uses the DNS server supplied by the local network, including private LAN hostnames. |
+| [Third-party app updates](#allow-kiosk-satellite-and-third-party-app-updates) | Lets correctly signed Kiosk Satellite and other non-Meta APKs update normally. |
+| [Automatic Shizuku startup](#install-shizuku-with-automatic-startup) | Starts Shizuku locally after every boot for apps that need ADB-shell privileges. |
+| [Read-only status](#status-report) | Reports the device, provisioning and runtime state without exploiting or rebooting. |
+| [Dry-run planning](#dry-run-planning) | Shows required tools, actions and reboots before changing the Portal. |
+| [Private backup bundles](#backup-bundles) | Saves diagnostics and reversible settings in a private, checksummed archive. |
+| [Interrupted-run recovery](#interrupted-run-recovery) | Safely resumes a validated provisioning run after a host or power interruption. |
+| [Exact-build safeguards](#supported-models) | Refuses kernel changes unless the model and full firmware fingerprint match. |
+| [Automatic retry and verification](#running-and-troubleshooting) | Retries race-sensitive attempts and accepts changes only after two verified boots. |
 
 ## Requirements
 
 ### Host computer
 
-- A Linux x86_64 host on the same network as the Portal
-- A USB data cable kept connected during the initial stock-device provisioning
-- Git, GNU Make, Python 3.9 or newer, and Android Debug Bridge (`adb`)
+- Linux x86_64 with Git, GNU Make, Python 3.9 or newer and Android Debug Bridge (`adb`)
 - Android NDK r28.2 (`28.2.13676358`)
-- A Java Development Kit with `javac` and `jar`
-- Android SDK Platform 36 and an Android Build Tools installation containing
-  `aapt`, `zipalign`, and `apksigner`; `d8` is also required by actions that
-  build Java helpers, including `--shizuku` and `--presence-fps-cap`
-- Internet access to download the pinned official Shizuku APK, or a local APK
-  supplied with `--shizuku-apk PATH`
+- A JDK plus Android SDK Platform 36 and Build Tools containing `aapt`, `zipalign`, `apksigner` and `d8`
+- A USB data cable for initial stock-device setup
+- Internet access for the pinned Shizuku APK, unless using `--shizuku-apk PATH`
 
-The Python provisioner uses only the standard library; there are no Python
-packages to install.
+The provisioner uses only the Python standard library.
 
 ### Portal
 
-- A model and exact firmware build listed under [Supported models](#supported-models)
-- Developer access enabled on the Portal and an authorized USB ADB connection
+- An exact model and firmware build listed under [Supported models](#supported-models)
+- Developer access enabled and the host authorized over USB ADB
 - Wireless ADB enabled for the current boot with `adb -d tcpip 5555`
-- A stable IP address, network connection, and external power for several reboots
-- The physical camera cover open and the camera/microphone privacy control off
-  when using the `kiosk` profile, `--optimize-presence`, or
-  `--presence-fps-cap`
-- Kiosk Satellite installed and configured
-- Kiosk Satellite's device-admin receiver enabled before using
-  `--device-owner`
+- Stable network, a stable IP address and external power for several reboots
+- [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) installed and configured
+- Kiosk Satellite's device-admin receiver enabled before using `--device-owner`
+- The physical camera cover open and camera/microphone privacy control off for presence features and the `kiosk` profile
 
-`--optimize-presence` verifies the retained camera-to-world-model pipeline
-automatically after each reboot. It does not require anyone to remain in view.
+Presence verification checks the live camera pipeline automatically. Nobody
+needs to remain in view during the reboot sequence.
 
 ## Supported models
 
@@ -179,42 +82,25 @@ automatically after each reboot. It does not require anyone to remain in view.
 | --- | --- | --- | --- | --- | --- |
 | Meta Portal Go | `terry` | 10 | `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 
-Other Portal models and other Portal Go firmware builds are not yet supported.
-Do not substitute target constants from a similar device. Kernel addresses and
-object layouts must be derived and verified for every exact build.
+Support is exact-build specific. Other models and Portal Go firmware versions
+need their own verified target before the provisioner will accept them.
 
 ## Possible supported devices
 
-The following models appear to be candidates for future support. This table is
-based on Meta's published kernel source and archived Portal firmware images; it
-does not mean that the current exploit can run on these devices. Every device
-and complete firmware fingerprint needs a separately generated and tested
-target before the provisioner will accept it.
+These models are candidates for future ports based on Meta's published kernel
+sources and archived firmware. They are **not supported by the current build**.
 
-| Model | Codename or firmware family | Android | Published kernel | Porting outlook |
-| --- | --- | --- | --- | --- |
-| Meta Portal 10-inch, 2nd generation | `omni` | 10 | `4.9.227-perf+` | Strong candidate. It uses the same Qualcomm QCS605 and kernel family as the tested Portal Go. |
-| Meta Portal Mini | `atlas`, using the `omni` firmware family | 10 | `4.9.227-perf+` | Strong candidate. It is expected to share most of the `omni` port, with its exact identity and firmware still checked separately. |
-| Meta Portal+ 14-inch (2021) | `cipher` | 10 | `4.9.227-perf+` | Strong candidate. Its published kernel closely matches the `terry` and `omni` kernels. |
-| Original Meta Portal 10-inch | `aloha` | 9 | `4.4.153+` | Possible, but it needs a Linux 4.4-specific port and on-device validation. |
-| Original Meta Portal+ 15.6-inch | `ohana`, sharing the `aloha` firmware family | 9 | `4.4.153+` | Possible through the `aloha` family, but it needs the Linux 4.4 port and model validation. |
-| Meta Portal TV | `ripley` | 9 | `4.4.153+` | Possible, but it needs the Linux 4.4 port plus TV-specific provisioning and validation. |
+| Model | Family | Android | Porting outlook |
+| --- | --- | --- | --- |
+| Meta Portal 10-inch, 2nd generation | `omni` | 10 | Strong candidate with the same QCS605 and 4.9 kernel family as Portal Go. |
+| Meta Portal Mini | `atlas` / `omni` | 10 | Strong candidate expected to share most of the `omni` port. |
+| Meta Portal+ 14-inch (2021) | `cipher` | 10 | Strong candidate with a closely related 4.9 kernel. |
+| Original Meta Portal 10-inch | `aloha` | 9 | Possible, but requires a Linux 4.4-specific port. |
+| Original Meta Portal+ 15.6-inch | `ohana` / `aloha` | 9 | Possible through the `aloha` family with model validation. |
+| Meta Portal TV | `ripley` | 9 | Possible with a Linux 4.4 and TV-specific port. |
 
-The archived kernels for these families contain the PI-futex and real-time
-mutex paths involved in GhostLock, along with the ashmem, procfs, and configfs
-components used by this exploit chain. The Android 10 devices are the best
-initial candidates because their 4.9 kernels are closest to the working
-`terry` target. The Android 9 devices use different kernel structures,
-allocator behavior, and stack layouts, so supporting them is a larger port.
-
-Useful references are Meta's published
-[Portal 4.4 kernel](https://github.com/facebookincubator/Portal-Kernel/tree/portal-msm-4.4-kernel-master),
-[Portal 4.9 kernel](https://github.com/facebookincubator/Portal-Kernel/tree/portal-msm-4.9-kernel-master),
-the [archived Portal firmware families](https://dumps.tadiphone.dev/dumps/facebook),
-and the [GhostLock security bulletin](https://access.redhat.com/security/vulnerabilities/RHSB-2026-010).
-
-To help add a model, connect to it with ADB and collect its identity without
-running the exploit:
+To request support, open an issue with the retail model and this output. Do
+not publish an ADB address, pairing code or account information.
 
 ```sh
 adb shell getprop ro.product.model
@@ -223,178 +109,101 @@ adb shell getprop ro.build.fingerprint
 adb shell uname -a
 ```
 
-Open an issue with this output and identify the retail model. Do not publish a
-private ADB address, pairing code, or any account information.
-
 ## Step-by-step installation
 
-### 1. Install the host tools
+### 1. Install and configure the host tools
 
-Install Git, Make, Python, ADB, a JDK, and the Android command-line tools using
-your Linux distribution and Android SDK manager. Install NDK version
-`28.2.13676358`, Android Platform 36, and a Build Tools version that provides
-`d8`.
-
-### 2. Clone the repository
+Install the tools listed under [Requirements](#requirements), then clone the
+repository and point the build at your Android SDK. Adjust the Build Tools path
+if your installed version differs.
 
 ```sh
 git clone https://github.com/jxlarrea/portal-root-kiosk-satellite.git
 cd portal-root-kiosk-satellite
-```
 
-### 3. Configure the Android toolchain
-
-Point the build at the SDK installed on the host. Adjust the Build Tools
-version if the installed `d8` is in a different directory.
-
-```sh
 export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
 export NDK="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
 export ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-36/android.jar"
 export BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/37.0.0"
-export D8="$ANDROID_SDK_ROOT/build-tools/37.0.0/d8"
+export D8="$BUILD_TOOLS/d8"
 ```
 
-The provisioner builds the files required by the selected actions. To check
-the core exploit build before touching a device, run:
+### 2. Prepare Kiosk Satellite and the Portal
 
-```sh
-make -C exploit -j2 all
-```
+Install Kiosk Satellite manually from its
+[GitHub repository](https://github.com/jxlarrea/kiosk-satellite) and open it
+once. Enable its device-admin receiver in the app if you plan to use Device
+Owner. Open the Portal's physical camera cover and turn off its
+camera/microphone privacy control.
 
-### 4. Connect to the Portal
+<a id="connect-to-the-portal"></a>
+### 3. Connect to the Portal
 
-Stock Portal firmware disables ADB after every reboot. First enable developer
-access and ADB on the Portal, connect it to the host with a USB data cable, and
-authorize the host if the Portal asks. Confirm the USB connection and enable
-wireless ADB for the current boot:
+Stock firmware disables ADB after every reboot. Enable developer access and
+ADB on the Portal, connect the USB data cable, authorize the host and run:
 
 ```sh
 adb -d get-state
 adb -d tcpip 5555
-```
 
-The first command must print `device`. Keep the USB cable connected throughout
-the initial provisioning run.
-
-Set the Portal's current IP address and connect over wireless ADB:
-
-```sh
-export PORTAL_IP=192.168.1.100  # replace with your Portal's address
+export PORTAL_IP=192.168.1.100  # replace with the Portal's address
 adb connect "$PORTAL_IP:5555"
 adb -s "$PORTAL_IP:5555" get-state
 ```
 
-The final command must print `device`. Confirm the model and complete firmware
-fingerprint before continuing:
+Both state checks must print `device`. Keep USB connected during the first
+provisioning run.
+
+The provisioner begins from a clean reboot. On an unprovisioned Portal, enable
+ADB again on the developer screen and rerun `adb -d tcpip 5555` after every
+reboot until the provisioner prints `WIRELESS_ADB_OK`. Keep a second terminal
+ready for this step. After the first successful exploit, wireless ADB survives
+normal reboots and USB is no longer needed.
+
+### 4. Confirm compatibility
 
 ```sh
 adb -s "$PORTAL_IP:5555" shell getprop ro.product.device
 adb -s "$PORTAL_IP:5555" shell getprop ro.build.fingerprint
 ```
 
-Compare both values with the supported-model table. The provisioner performs
-the same check and stops before exploitation if either value differs.
+Both values must exactly match the [supported model](#supported-models). The
+provisioner checks them again before making any kernel change.
 
-Do not test this connection by rebooting: on an unprovisioned stock Portal it
-will disappear. The provisioner deliberately starts the exploit from a clean
-boot. When the Portal finishes that reboot, enable ADB again on its developer
-screen and run this from a second host terminal:
-
-```sh
-adb -d tcpip 5555
-```
-
-Repeat those two steps after every failed exploit attempt that reboots the
-Portal. The provisioner keeps trying to reconnect for 180 seconds. If that
-window expires, restore USB and wireless ADB, then rerun the same provisioning
-command.
-
-The first successful privileged exploit persists wireless ADB on TCP port
-5555. The provisioner prints `WIRELESS_ADB_OK persistent_port=5555` after the
-next boot; its two verification reboots and future normal reboots can then run
-without repeating the USB procedure.
-
-### 5. Prepare Kiosk Satellite
-
-Download and install Kiosk Satellite manually from the
-[Kiosk Satellite repository](https://github.com/jxlarrea/kiosk-satellite), then
-open it once. The provisioner deliberately does not download, install, or
-update the Kiosk Satellite APK. This keeps application releases under the
-user's control.
-
-If Kiosk Satellite will become the Device Owner, enable its device-admin
-receiver through its setup flow first. You can inspect the loaded policy with:
-
-```sh
-adb -s "$PORTAL_IP:5555" shell dumpsys device_policy
-```
-
-The provisioner requires
-`me.jxl.kiosk_satellite/.KioskAdminReceiver` to appear as an enabled admin and
-refuses to replace an existing Device Owner belonging to another application.
-
-### 6. Run the provisioner
-
-Open the Portal's physical camera cover and make sure its camera/microphone
-privacy control is off. The `kiosk` profile verifies the live camera-based
-presence pipeline and stops with a clear error when a hardware privacy control
-disables the camera.
-
-For the complete tested Kiosk Satellite profile, run:
+<a id="run-the-provisioner"></a>
+### 5. Run the recommended profile
 
 ```sh
 python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
   --profile kiosk
 ```
 
-The `kiosk` profile expands to the audio, Device Owner, Kiosk Satellite home,
-update blocking, debloat, Meta-account removal, presence optimization, and
-third-party app update actions. Add `--dhcp-dns` to use the local network's
-resolver or `--privacy-dns HOSTNAME` when you operate a DNS-over-TLS filtering
-resolver. Add `--shizuku` when apps on the Portal need Shizuku's shell-level
-APIs, or `--presence-fps-cap 2` when reduced Meta analysis CPU use is more
-important than its default analysis cadence. Add `--disable-camera-light` if
-you also want to suppress the green software-controlled camera-use indicator.
+The `kiosk` profile configures audio, Device Owner, Kiosk Satellite HOME,
+firmware blocking, debloat, Meta-account removal, presence optimization and
+third-party app updates. These core features do not need to be added as
+individual flags.
 
-The Portal will reboot several times. Leave it powered and do not close the
-terminal. For a stock Portal, also keep USB connected and follow the ADB
-re-enable procedure in step 4 until `WIRELESS_ADB_OK` appears. A completed run
-ends with `PROVISION_OK` and two different boot IDs. Attempt logs are saved
-under a timestamped directory in `/tmp`; use `--log-dir PATH` to choose another
-location.
+Add only the extra features you want:
 
-Every action is optional. Select only the flags needed for a particular
-device. The sections below explain each action, its prerequisites, and its
-available rollback.
+- `--presence-fps-cap 2` to reduce Meta's presence-analysis rate
+- `--disable-camera-light` to suppress the bright green software camera indicator
+- `--dhcp-dns` or `--privacy-dns HOSTNAME` to change DNS behavior
+- `--shizuku` to install Shizuku with automatic startup
 
-## Provisioning actions
+The Portal reboots several times and ends with `PROVISION_OK` plus two
+different verification boot IDs. If you do not want the complete profile, use
+the individual commands in the reference below to build a custom setup.
 
-| Action | Flag | Uses root | Automated rollback |
-| --- | --- | --- | --- |
-| Apply the complete tested kiosk profile | `--profile kiosk` | Yes | Use the individual rollback flags |
-| Persist wireless ADB across future boots | Automatic with root-backed actions | Yes | No |
-| Disable hardware audio processing | `--audio` | Yes | `--restore-audio` |
-| Make Kiosk Satellite Device Owner | `--device-owner` | Yes, on first setup | No |
-| Make Kiosk Satellite the persistent home screen | `--kiosk-home` | No; Device Owner required | `--restore-kiosk-home` |
-| Disable automatic firmware updates | `--disable-updates` | Yes | `--enable-updates` |
-| Disable unused Meta applications and cloud workers | `--debloat` | Yes | `--restore-bloat` |
-| Remove local Meta accounts | `--remove-meta-accounts` | Yes | No |
-| Reduce AIService presence workload | `--optimize-presence` | Yes | `--restore-presence-profile` |
-| Cap Meta presence-analysis rate | `--presence-fps-cap FPS` | Yes | `--restore-presence-fps` |
-| Disable the green camera-use indicator | `--disable-camera-light` | Yes | `--restore-camera-light` |
-| Use a filtering Private DNS resolver | `--privacy-dns HOSTNAME` | No | `--restore-privacy-dns` |
-| Use DNS supplied by the local network | `--dhcp-dns` | No | `--restore-privacy-dns` |
-| Allow Kiosk Satellite and third-party app updates | `--allow-app-updates` | No | `--restore-app-verifier` |
-| Install Shizuku with automatic startup | `--shizuku` | Yes | `--remove-shizuku` |
+## Provisioning feature reference
 
-Flags can be combined in one command. Combining privileged actions performs
-them during the same successful exploit run and verifies all requested states
-after reboot. For clarity, use explicit action flags: running the provisioner
-without one retains its legacy behavior and is equivalent to selecting
-`--audio`.
+The recommended `kiosk` profile already applies every feature labeled
+**Included in the kiosk profile**. Their individual sections remain useful for
+selective setups, technical details and rollback commands. Features labeled
+**Optional add-on** require their own flag.
 
-### 1. Disable hardware echo cancellation and noise suppression
+<a id="disable-hardware-echo-cancellation-and-noise-suppression"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Disable hardware echo cancellation and noise suppression</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -428,7 +237,11 @@ python3 tools/provision_portal.py \
 The restore uses the original loader saved during the first installation and
 refuses to replace an unrelated file.
 
-### 2. Make Kiosk Satellite the Device Owner
+</details>
+
+<a id="make-kiosk-satellite-the-device-owner"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Make Kiosk Satellite the Device Owner</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -447,7 +260,11 @@ policy state under `/data/local/tmp/portal-device-owner-backup` and verifies
 both DevicePolicyManager and `ro.device_owner=true` after reboot. There is no
 automated Device Owner removal action in the provisioner.
 
-### Use Kiosk Satellite as the home screen
+</details>
+
+<a id="use-kiosk-satellite-as-the-home-screen"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Use Kiosk Satellite as the home screen</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -471,7 +288,11 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-kiosk-home
 ```
 
-### 3. Disable automatic Meta firmware updates
+</details>
+
+<a id="disable-automatic-meta-firmware-updates"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Disable automatic Meta firmware updates</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -495,7 +316,11 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --enable-updates
 ```
 
-### 4. Disable unused Meta applications
+</details>
+
+<a id="disable-unused-meta-applications"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Disable unused Meta applications</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -543,7 +368,11 @@ python3 tools/provision_portal.py \
 Both commands verify the retained camera, AIService, Kiosk Home, and WebView
 paths across two reboots.
 
-### 5. Remove local Meta accounts
+</details>
+
+<a id="remove-local-meta-accounts"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Remove local Meta accounts</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -568,7 +397,11 @@ obsolete invalid-owner HOME screen. Use `--kiosk-home` after Kiosk Satellite is
 Device Owner, or use `--profile kiosk`, to keep the account warning from taking
 focus.
 
-### 6. Reduce AIService CPU use while preserving presence detection
+</details>
+
+<a id="reduce-aiservice-cpu-use-while-preserving-presence-detection"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Reduce AIService CPU use while preserving presence detection</summary>
 
 Run:
 
@@ -624,7 +457,44 @@ python3 tools/provision_portal.py \
 The installer and restore action use atomic file replacement, preserve the
 app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
 
-#### Optional presence-analysis frame-rate cap
+</details>
+
+<a id="allow-kiosk-satellite-and-third-party-app-updates"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Allow Kiosk Satellite and third-party app updates</summary>
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --allow-app-updates
+```
+
+Meta registers `com.facebook.appverifier` as Android's package-verification
+agent. It rejects APKs whose certificates are outside Meta's private allowlist,
+including correctly signed Kiosk Satellite releases, with
+`INSTALL_FAILED_VERIFICATION_FAILURE`. This action saves the existing Android
+setting and verifier-package state, sets `package_verifier_enable=0`, and
+disables Meta's verifier package for user 0. The package state is the durable
+control if Meta later rewrites the Android setting. The provisioner verifies
+both states on two separate boots.
+
+This action is independent of Shizuku. It allows updates installed through the
+normal Android confirmation screen, Kiosk Satellite Device Owner, the optional
+update helper, or Shizuku. Android continues to require a matching application
+signature for updates and continues to reject version downgrades. Meta's
+verifier package remains installed and can be restored to its saved state.
+
+Restore the saved Android setting and verifier-package state with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-app-verifier
+```
+
+</details>
+
+<a id="optional-presence-analysis-frame-rate-cap"></a>
+<details>
+<summary><strong>Optional add-on:</strong> Presence-analysis frame-rate cap</summary>
 
 The full-scene profile keeps Meta's analysis pipeline busy at its firmware
 rate. To reduce that remaining load, cap only its pose-analysis callback. Two
@@ -669,15 +539,18 @@ python3 tools/provision_portal.py \
 `--restore-presence-profile` also removes the cap and helper before restoring
 the complete original presence configuration.
 
-### Disable the green camera indicator
+</details>
+
+<a id="disable-the-green-camera-indicator"></a>
+<details>
+<summary><strong>Optional add-on:</strong> Disable the green camera indicator</summary>
 
 ```sh
 python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --disable-camera-light
 ```
 
-This optional action keeps the Portal's green software-controlled camera-use
-indicator off. It does not close the camera or change Kiosk Satellite's camera,
+This optional action keeps the Portal's exremely bright, software-controlled green LED camera-use indicator off. It does not close the camera or change Kiosk Satellite's camera,
 gesture, snapshot, presence, or RTSP behavior. The orange light shown when the
 physical camera cover is closed comes from a separate hardware path and remains
 unchanged.
@@ -701,7 +574,11 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-camera-light
 ```
 
-### 7. Use a filtering Private DNS resolver
+</details>
+
+<a id="configure-dns"></a>
+<details>
+<summary><strong>Optional add-on:</strong> Configure local or filtering DNS</summary>
 
 To resolve private LAN zones through the DNS servers advertised by the active
 network, run:
@@ -740,36 +617,11 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-privacy-dns
 ```
 
-### 8. Allow Kiosk Satellite and third-party app updates
+</details>
 
-```sh
-python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --allow-app-updates
-```
-
-Meta registers `com.facebook.appverifier` as Android's package-verification
-agent. It rejects APKs whose certificates are outside Meta's private allowlist,
-including correctly signed Kiosk Satellite releases, with
-`INSTALL_FAILED_VERIFICATION_FAILURE`. This action saves the existing Android
-setting and verifier-package state, sets `package_verifier_enable=0`, and
-disables Meta's verifier package for user 0. The package state is the durable
-control if Meta later rewrites the Android setting. The provisioner verifies
-both states on two separate boots.
-
-This action is independent of Shizuku. It allows updates installed through the
-normal Android confirmation screen, Kiosk Satellite Device Owner, the optional
-update helper, or Shizuku. Android continues to require a matching application
-signature for updates and continues to reject version downgrades. Meta's
-verifier package remains installed and can be restored to its saved state.
-
-Restore the saved Android setting and verifier-package state with:
-
-```sh
-python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --restore-app-verifier
-```
-
-### 9. Install Shizuku with automatic startup
+<a id="install-shizuku-with-automatic-startup"></a>
+<details>
+<summary><strong>Optional add-on:</strong> Install Shizuku with automatic startup</summary>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -814,7 +666,9 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --remove-shizuku
 ```
 
-## Inspection, backups, and recovery
+</details>
+
+## Inspection, backups and recovery
 
 ### Status report
 
@@ -873,7 +727,34 @@ Recovery first removes stale staged files. It resumes only a validated pending
 manifest; for a completed run or a device with no manifest, it prints status
 and exits without changing the configuration.
 
-## Running and troubleshooting
+## Technical details and troubleshooting
+
+<a id="how-the-root-exploit-works"></a>
+<details>
+<summary><strong>How the root exploit works</strong></summary>
+
+The project adapts GhostLock,
+[CVE-2026-43499](https://www.cve.org/CVERecord?id=CVE-2026-43499), to a
+specific Portal kernel. The provisioner confirms the complete device identity,
+reboots into a clean state, derives randomized kernel addresses and starts the
+exploit through a staged native library. Temporary kernel read/write access
+gives only that process the credentials needed to perform the selected work.
+
+The device then reboots normally with SELinux enforcing. The exploit does not
+install `su`, a root shell or a root daemon. Features that must survive reboot
+use narrow configuration changes or dedicated helpers with only the privileges
+they need. The provisioner verifies the requested state on two normal boots.
+
+Kernel exploitation is race-sensitive, so a missed attempt can reboot or
+briefly freeze the Portal. The provisioner retries from a clean boot. Exact
+model and firmware checks prevent it from using one build's kernel layout on
+another device.
+
+</details>
+
+<a id="running-and-troubleshooting"></a>
+<details>
+<summary><strong>Running and troubleshooting</strong></summary>
 
 The default maximum is 12 exploit attempts. Change it with `--attempts N`,
 where `N` is between 1 and 100. A failed race normally causes a clean reboot
@@ -897,35 +778,13 @@ Each successful run verifies the requested state on two distinct boots. Read
 the final `PROVISION_OK` line and keep the attempt directory when diagnosing a
 failure.
 
-## Repository layout
-
-- `exploit/`: GhostLock source, privileged provisioning actions, and
-  exact-build target definitions
-- `helper/`: persistent native audio watchdog and the earlier helper APK
-- `shizuku-helper/`: device-local loopback-ADB launcher for Shizuku
-- `presence-helper/`: legacy loopback-ADB presence activator retained for
-  migration and rollback compatibility
-- `uid1000-helper/`: UID-1000 presence activator, camera-indicator watchdog,
-  and guarded ART boot trampoline
-- `exploit-sentinel/`: temporary no-permission debuggable package used by the
-  GhostLock scheduler trigger
-- `tools/provision_portal.py`: user-facing build, installation, retry, and
-  two-reboot verification tool
-- `tools/portal_targets.py`: exact model and firmware registry used before any
-  build-specific kernel write
-- `tools/PortalAccountCtl.java`: privileged local-account cleanup helper
-- `analysis/`: kernel offset extraction and device-analysis utilities
-- `docs/current-status.md`: current implementation and validation details
-- `docs/findings.md`: chronological reverse-engineering and test record
-- `artifacts/`: manifest for large local firmware and crash artifacts excluded
-  from Git
-
+</details>
 
 ## Support the project
 
 If this project breathed new life into your Meta Portal, consider supporting
 my work through [Buy Me a Coffee](https://buymeacoffee.com/jxlarrea). Your
-support helps me obtain more Portal models, test additional firmware, and keep
+support helps me obtain more Portal models, test additional firmware and keep
 improving the tools that make these devices useful again.
 
 <p align="center">
