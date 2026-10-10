@@ -499,6 +499,46 @@ same ART approach remains exact-firmware-specific and should only host helpers
 whose required permissions and SELinux access are already available to that
 system application.
 
+## UID-1000 capability audit
+
+The Platform Battery State host shares Android's `android.uid.system` identity
+with Settings, the framework package, and several Meta platform applications.
+Package Manager therefore reports a broad shared permission set, including
+`WRITE_SECURE_SETTINGS`, `MANAGE_DEBUGGING`, `DELETE_PACKAGES`,
+`FORCE_STOP_PACKAGES`, `MANAGE_USERS`, `MANAGE_DEVICE_ADMINS`, and `REBOOT`.
+The helper can also discover nearly every ordinary framework Binder service.
+Those grants make UID 1000 useful for narrowly defined Android administration,
+but they do not bypass SELinux or provide Linux root capabilities.
+
+The firmware policy and live process state establish these feature boundaries:
+
+| Function | UID-1000 result | Consequence |
+| --- | --- | --- |
+| Privacy HAL and green camera indicator | Verified working | Keep the current watchdog |
+| Android package, settings, app-op, user, and device-policy services | Permitted by the shared UID and framework service policy | Suitable for future fixed-purpose helpers |
+| Camera, virtual-camera, battery-state, MobileConfig, and OTA interfaces | Binder/HIDL access is present | Each API still exposes only its implemented operations; the battery-state HAL is read-only |
+| Meta audio-processing manager | Not directly usable | `system_app` cannot discover the private `fb_audio_manager_service`, and the shared UID is not granted Meta's `PLATFORM_AUDIO` permission; retain the AIService audio watchdog |
+| Charger control | Blocked | Only `chargecontrol_app` can write `sysfs_battery_supply`; `system_app` has no read or write rule for the ISL9538 controls |
+| Kiosk Satellite or AIService private files | Blocked | UID 1000 can manage its own shared system-app data, not another application's data directory |
+| Wireless-ADB properties | Blocked for the required property type | `service.adb.tcp.port` is `shell_prop`, which `system_app` cannot set; retain the one-time root-backed persistent property change |
+| Kernel, mounts, verified partitions, arbitrary process credentials, and SELinux policy | Blocked | These still require UID 0 plus the relevant capability and SELinux access |
+
+Shizuku's stock native starter accepts only UID 0 or ADB UID 2000 and exits for
+UID 1000. Its Java server can technically be launched directly under
+`system_app`, because the domain may execute `app_process`, read the installed
+manager APK, and exchange Binder objects with application domains. Such a
+server would give every Shizuku-authorized application the broad system shared
+UID rather than the current shell identity. It is therefore not enabled by the
+existing `--shizuku` action. Any future system-mode option should remain
+separate, require an explicit flag, retain Shizuku's per-app authorization,
+and verify both the reported UID and SELinux context after every boot.
+
+If a stable UID-0 boot process is later established without replaying the
+GhostLock corruption, it should become the single supervisor for all tasks
+that actually require root. UID-1000-only tasks can then move behind the same
+supervisor while keeping fixed, auditable operations instead of an unrestricted
+network or application command shell.
+
 ## Account-free Kiosk Satellite home
 
 After the local Meta owner account was removed, Portal firmware selected

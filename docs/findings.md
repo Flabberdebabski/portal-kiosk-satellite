@@ -2072,3 +2072,48 @@ boots. `--restore-camera-light` removes it and regenerates the original ART
 cache. This result does not provide persistent root: it is a constrained,
 firmware-specific UID-1000 hook whose SELinux domain still limits what future
 helpers can do.
+
+169. Audited the verified UID-1000 `system_app` process as a possible common
+host for other persistent features. Its package belongs to
+`android.uid.system`, whose aggregate Package Manager grants include secure
+settings, debugging management, package deletion, force-stop, user and device
+administration, reboot, network administration, and many other signature
+permissions. Platform policy also allows `system_app` to list services and
+find nearly every normal framework Binder service. This makes it a capable
+host for fixed Android framework operations, although the native helper would
+still need explicit Binder clients or an `app_process` entry point for each
+operation.
+
+The vendor policy supplies direct access to the privacy, camera, virtual-camera,
+battery-state, MobileConfig, and OTA services. It does not give `system_app`
+read or write access to `sysfs_battery_supply`; the write rule remains limited
+to `chargecontrol_app`. The battery-state HAL that `system_app` can call exposes
+read-only state. The policy permits Binder traffic between `system_app` and the
+Meta audio-manager process, but it does not permit `system_app` to find the
+private `fb_audio_manager_service`, and the system shared UID does not have the
+AIService package's `PLATFORM_AUDIO` grant. The current AIService-resident audio
+watchdog therefore remains necessary. Application-domain isolation also blocks
+the helper from Kiosk Satellite and AIService private data.
+
+The persistent ADB route cannot move to this helper: Android labels
+`service.adb.tcp.port` as `shell_prop`, and `system_app` has no property-service
+set rule for that type. The original root-backed persistent property write is
+still required. UID 1000 likewise has no capability, process-transition, mount,
+verified-partition, or SELinux-policy authority that would turn it into root.
+
+Upstream Shizuku 13.6.0's native starter contains an explicit UID check and
+accepts only UID 0 or UID 2000. Static tracing of the accompanying server shows
+that a custom launcher could execute its Java main class through `app_process`
+as UID 1000: `system_app` may execute `zygote_exec`, read installed APK files,
+and exchange Binder objects with other application domains. This would expose
+the system shared UID to every Shizuku-authorized application and is materially
+broader than the current shell server. The existing `--shizuku` behavior is
+therefore unchanged. A future system-mode implementation must be a separate,
+explicit option with per-app authorization and boot-time UID/SELinux checks.
+
+Current allocation: keep camera-light control in the UID-1000 helper; retain
+audio inside AIService, presence configuration behind its loopback-ADB helper,
+and charging as unsupported; continue using temporary root for one-time data
+and property changes. If a stable non-corrupting UID-0 boot supervisor is ever
+found, consolidate privileged persistent jobs there rather than maintaining
+multiple general-purpose privileged services.
