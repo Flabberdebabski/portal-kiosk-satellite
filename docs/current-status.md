@@ -19,6 +19,28 @@ The current boot's randomized `_text` is recovered with Android's bundled
 `el0_svc_naked+0x34`; subtracting `0x3d7e` gives the runtime kernel base passed
 through `GHOSTLOCK_KASLR_BASE`.
 
+The first-generation Portal+ exact build is also supported by the host target
+registry. The tested device identifies as `aloha` with fingerprint
+`Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys`
+and Linux `4.4.153+`. Its port uses the 4.4 ptrace stack layout, a KGSL-backed
+order-2 reclaim, bugreport-derived `memstart_addr`, and symbols extracted from
+the installed boot image.
+
+The Aloha root stage leaves global SELinux state enforcing. A shell-domain
+controller creates a waiting child, changes only that child's credential to
+UID 0 with full capabilities, and copies PID 1's live SELinux `osid`/`sid`
+pair into the child's security blob. The controller verifies the mutation,
+restores `ashmem_misc.fops`, clears the forged-table owner, and only then
+releases the UID-0/init-domain child to perform requested provisioning work.
+Failure paths mark the child aborted before releasing it.
+
+Wireless ADB persistence is verified on Aloha. The delegated child set
+`persist.adb.tcp.port=5555` through Android's property service, and ADB returned
+without manual intervention after two distinct reboots. The post-reboot shell
+was UID 2000 in `u:r:shell:s0`, and SELinux remained enforcing. This validates
+the root transport and automatic wireless ADB on the exact Portal+ build; the
+complete Kiosk Satellite feature profile still needs model-specific testing.
+
 Privileged provisioning is self-contained on a factory-reset device. Before
 the first clean reboot, the host installs the no-permission debuggable package
 `dev.portal.exploitsentinel`, verifies its `run-as` path, and passes that exact

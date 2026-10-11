@@ -2119,3 +2119,43 @@ loopback-ADB helper; and continue using temporary root for one-time data and
 property changes. If a stable non-corrupting UID-0 boot supervisor is ever
 found, consolidate privileged persistent jobs there rather than maintaining
 multiple general-purpose privileged services.
+
+170. Ported the temporary-root transport to the first-generation Meta Portal+
+exact build. The tested unit reports `ro.product.device=aloha`, Android 9,
+fingerprint
+`Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys`,
+and Linux `4.4.153+`. The target was generated from the installed boot image's
+kallsyms and Meta's matching 4.4 source build. This firmware needs the 4.4
+ptrace waiter offset, KGSL order-2 reclaim, twenty recycled `mm_struct` slabs,
+and the randomized linear-map base parsed from its own bugreport.
+
+The first arbitrary-write test established that global SELinux mutation is not
+safe on this build: the faulting arm64 copy path can zero-pad through the end
+of its aligned copy block and corrupt the adjacent `file_security_cache`
+pointer. The shipped Aloha path therefore never changes `selinux_enforcing`.
+It creates a waiting action child, locates that exact PID in the kernel task
+list, verifies the complete credential and security-object guards, writes only
+the UID/GID and capability region, and copies PID 1's live SELinux `osid` and
+`sid` into the child's first aligned security word. The observed child became
+UID/EUID 0 with capability mask `0000003fffffffff` in `u:r:init:s0` while the
+controller remained UID 2000 in `u:r:shell:s0`.
+
+Keeping the controller in the shell domain solved cleanup. It verified the
+child mutation, restored `ashmem_misc.fops`, cleared the forged-table owner,
+closed the primitive, and only then released the child through shared memory.
+The restore writer now accepts a verified 32-byte zero guard; the exact Aloha
+image has a 56-byte zero gap after `ashmem_misc.fops`, while runtime evidence
+shows the short-copy zero padding is bounded by the current 16-byte copy block.
+Failure paths set an abort flag before releasing the child, so no provisioning
+action runs after incomplete cleanup.
+
+The delegated child set `persist.adb.tcp.port=5555` through Android's property
+service. A confirmation run reported `action=1`, `step=0`, and
+`provision actions complete ok=1 source=delegated-child`. Wireless ADB then
+returned by itself on boot `2f3d2f5a-8fc1-41ca-97f1-afe471579bcb`; the
+persistent property read back as `5555`, the new ADB shell was ordinary UID
+2000 in `u:r:shell:s0`, and SELinux was enforcing. This is persistent wireless
+ADB, not persistent root: the UID-0 action child exists only during the guarded
+one-shot provisioning window. The complete Portal+ feature profile remains to
+be validated separately because the test device does not have Kiosk Satellite
+installed.

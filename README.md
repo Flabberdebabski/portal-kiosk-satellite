@@ -87,8 +87,9 @@ needs to remain in view during the reboot sequence.
 | Model | Codename | Android | Supported firmware fingerprint | Kernel | Status |
 | --- | --- | --- | --- | --- | --- |
 | Meta Portal Go | `terry` | 10 | `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
+| Meta Portal+ (1st generation) | `aloha` | 9 | `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys` | `4.4.153+` | Root and automatic wireless ADB tested; feature profile validation in progress |
 
-Support is exact-build specific. Other models and Portal Go firmware versions
+Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
 
 ## Possible supported devices
@@ -101,8 +102,7 @@ sources and archived firmware. They are **not supported by the current build**.
 | Meta Portal 10-inch, 2nd generation | `omni` | 10 | Strong candidate with the same QCS605 and 4.9 kernel family as Portal Go. |
 | Meta Portal Mini | `atlas` / `omni` | 10 | Strong candidate expected to share most of the `omni` port. |
 | Meta Portal+ 14-inch (2021) | `cipher` | 10 | Strong candidate with a closely related 4.9 kernel. |
-| Original Meta Portal 10-inch | `aloha` | 9 | Possible, but requires a Linux 4.4-specific port. |
-| Original Meta Portal+ 15.6-inch | `ohana` / `aloha` | 9 | Possible through the `aloha` family with model validation. |
+| Original Meta Portal 10-inch | `aloha` | 9 | May share part of the tested Portal+ port, but its exact model and firmware still require validation. |
 | Meta Portal TV | `ripley` | 9 | Possible with a Linux 4.4 and TV-specific port. |
 
 To request support, open an issue with the retail model and this output. Do

