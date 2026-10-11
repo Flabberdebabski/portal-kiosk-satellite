@@ -91,6 +91,10 @@ needs to remain in view during the reboot sequence.
 
 Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
+The `aloha` software family is shared by more than one first-generation form
+factor. The tested target additionally requires `ro.product.model=Portal+`;
+an original 10-inch unit reporting `ro.product.model=Portal` is still a
+different, unverified model.
 
 ## Possible supported devices
 
@@ -102,7 +106,7 @@ sources and archived firmware. They are **not supported by the current build**.
 | Meta Portal 10-inch, 2nd generation | `omni` | 10 | Strong candidate with the same QCS605 and 4.9 kernel family as Portal Go. |
 | Meta Portal Mini | `atlas` / `omni` | 10 | Strong candidate expected to share most of the `omni` port. |
 | Meta Portal+ 14-inch (2021) | `cipher` | 10 | Strong candidate with a closely related 4.9 kernel. |
-| Original Meta Portal 10-inch | `aloha` | 9 | May share part of the tested Portal+ port, but its exact model and firmware still require validation. |
+| Original Meta Portal 10-inch | `aloha` software family | 9 | Different physical model from the tested 15.6-inch Portal+. It may share the port, but its `Portal` product model and exact firmware still require validation. |
 | Meta Portal TV | `ripley` | 9 | Possible with a Linux 4.4 and TV-specific port. |
 
 To request support, open an issue with the retail model and this output. Do
