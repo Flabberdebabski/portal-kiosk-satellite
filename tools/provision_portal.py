@@ -724,6 +724,8 @@ class PortalProvisioner:
         logs = shell(
             "logcat",
             "-d",
+            "-t",
+            "10000",
             "-v",
             "brief",
             "-e",
@@ -731,9 +733,23 @@ class PortalProvisioner:
             timeout=20,
         )
         connectivity = shell("dumpsys", "connectivity", timeout=20)
-        audio_logs = shell("logcat", "-d", "-s", "PortalAudioPersist:*", timeout=10)
+        audio_logs = shell(
+            "logcat",
+            "-d",
+            "-t",
+            "10000",
+            "-s",
+            "PortalAudioPersist:*",
+            timeout=10,
+        )
         camera_light_logs = shell(
-            "logcat", "-d", "-s", "PortalCameraLed:*", timeout=10
+            "logcat",
+            "-d",
+            "-t",
+            "10000",
+            "-s",
+            "PortalCameraLed:*",
+            timeout=10,
         )
         camera = shell("dumpsys", "media.camera", timeout=20)
         webview = shell("dumpsys", "webviewupdate", timeout=15)

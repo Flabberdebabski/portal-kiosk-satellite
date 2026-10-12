@@ -110,6 +110,36 @@ TARGETS = (
         uid1000_host_label="platformsecurestate",
     ),
     PortalTarget(
+        key="portal-10-omni-3051355900018050",
+        model="Meta Portal 10-inch (2nd generation)",
+        device="omni",
+        fingerprint=(
+            "Facebook/omni_prod/omni:10/QKQ1.210213.001/"
+            "3051355900018050:user/prod-keys"
+        ),
+        kernel="4.9.227-perf+",
+        preload_name="preload-portal-omni-3051355900018050.so",
+        make_target="portal-omni-3051355900018050",
+        kaslr_pc_offsets=(
+            0x3D7E,
+            0x3D54,
+            0x153C,
+            0x11756DC,
+            0x1175724,
+            0x363C6,
+            0xAF90E,
+            0x136E,
+            0x3A72,
+        ),
+        product_models=("Portal",),
+        reclaim_pairs=256,
+        reclaim_sends=256,
+        exploit_timeout_seconds=120,
+        recover_watch_result_after_disconnect=True,
+        uid1000_host_package="com.facebook.alohasdk.platformsecurestate",
+        uid1000_host_label="platformsecurestate",
+    ),
+    PortalTarget(
         key="portal-plus-aloha-1041515800015050",
         model="Meta Portal+ (1st generation)",
         device="aloha",

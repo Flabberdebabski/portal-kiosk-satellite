@@ -13,7 +13,7 @@ from portal_targets import TARGETS, find_target  # noqa: E402
 
 class PortalTargetSelectionTest(unittest.TestCase):
     def test_every_supported_build_selects_only_its_exact_target(self) -> None:
-        self.assertEqual(len(TARGETS), 3)
+        self.assertEqual(len(TARGETS), 4)
         for target in TARGETS:
             selected = find_target(
                 target.device,
@@ -30,7 +30,11 @@ class PortalTargetSelectionTest(unittest.TestCase):
             )
 
     def test_portal_go_and_first_generation_portal_plus_are_unchanged(self) -> None:
-        terry, cipher, aloha = TARGETS
+        targets = {target.device: target for target in TARGETS}
+        terry = targets["terry"]
+        cipher = targets["cipher"]
+        omni = targets["omni"]
+        aloha = targets["aloha"]
         self.assertEqual(terry.key, "portal-go-terry-5051355900018050")
         self.assertEqual(terry.stack_route, "sendmmsg")
         self.assertFalse(terry.bundled_simpleperf)
@@ -83,6 +87,18 @@ class PortalTargetSelectionTest(unittest.TestCase):
             "com.facebook.alohasdk.platformsecurestate",
         )
 
+        self.assertEqual(omni.key, "portal-10-omni-3051355900018050")
+        self.assertEqual(omni.stack_route, "sendmmsg")
+        self.assertFalse(omni.shell_root_package_actions)
+        self.assertEqual(omni.reclaim_pairs, 256)
+        self.assertEqual(omni.reclaim_sends, 256)
+        self.assertEqual(omni.exploit_timeout_seconds, 120)
+        self.assertTrue(omni.recover_watch_result_after_disconnect)
+        self.assertEqual(
+            omni.uid1000_host_package,
+            "com.facebook.alohasdk.platformsecurestate",
+        )
+
     def test_portal_plus_model_guard_is_enforced(self) -> None:
         for target in TARGETS:
             if target.product_models:
@@ -94,6 +110,10 @@ class PortalTargetSelectionTest(unittest.TestCase):
         cipher_header = (
             REPOSITORY
             / "exploit/targets/portal-cipher-4051355900018050/target.h"
+        ).read_text()
+        omni_header = (
+            REPOSITORY
+            / "exploit/targets/portal-omni-3051355900018050/target.h"
         ).read_text()
         terry_header = (
             REPOSITORY
@@ -110,6 +130,9 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertIn("#define CONFIGFS_ZERO_GUARD_SIZE 32", aloha_header)
         self.assertNotIn("#define CONFIGFS_BINARY_CLEANUP", aloha_header)
         self.assertIn("PlatformSecureStateService.apk@classes.dex", cipher_header)
+        self.assertIn("PlatformSecureStateService.apk@classes.dex", omni_header)
+        self.assertIn("#define CONFIGFS_ZERO_GUARD_SIZE 32", omni_header)
+        self.assertIn("#define CONFIGFS_BINARY_CLEANUP 1", omni_header)
         self.assertNotIn("PlatformSecureStateService", terry_header)
         self.assertNotIn("PlatformSecureStateService", aloha_header)
         self.assertIn("#define UID1000_ART_APPEND_SEGMENT 1", aloha_header)
