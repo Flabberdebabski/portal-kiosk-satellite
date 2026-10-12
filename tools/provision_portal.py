@@ -143,7 +143,7 @@ PRESENCE_LOGCAT_REGEX = (
     "Frame.available.for.roi.stream\\|"
     "Disabled.hardware.cropping\\|"
     "Notify.people.presence\\|"
-    "Setting.AI.Processing.FPS\\|PortalPresence\\|"
+    "Setting.AI.Processing.FPS\\|presence.FPS.activation\\|"
     "CAMERA_SERVICE.not.running\\|privacy.mode"
 )
 CAMERA_SERVICE_COMPONENT = (
@@ -152,7 +152,7 @@ CAMERA_SERVICE_COMPONENT = (
 )
 OTA_UI_PACKAGE = "com.facebook.aloha.otaui"
 OTA_SETUP_PACKAGE = "com.facebook.aloha.alohaotasetup"
-BATTERY_STATE_PACKAGE = "com.facebook.alohasdk.platformbatterystate"
+DEFAULT_UID1000_HOST_PACKAGE = "com.facebook.alohasdk.platformbatterystate"
 CAMERA_LIGHT_HELPER_LOCAL = (
     ROOT / "uid1000-helper/build/portal-camera-led-watch"
 )
@@ -629,6 +629,11 @@ class PortalProvisioner:
         device = shell("getprop", "ro.product.device", timeout=5)
         product_model = shell("getprop", "ro.product.model", timeout=5)
         target = find_target(device, fingerprint, product_model)
+        uid1000_host_package = (
+            target.uid1000_host_package
+            if target
+            else DEFAULT_UID1000_HOST_PACKAGE
+        )
         ota_packages = (
             target.ota_packages
             if target
@@ -665,6 +670,9 @@ class PortalProvisioner:
         )
         connectivity = shell("dumpsys", "connectivity", timeout=20)
         audio_logs = shell("logcat", "-d", "-s", "PortalAudioPersist:*", timeout=10)
+        camera_light_logs = shell(
+            "logcat", "-d", "-s", "PortalCameraLed:*", timeout=10
+        )
         camera = shell("dumpsys", "media.camera", timeout=20)
         webview = shell("dumpsys", "webviewupdate", timeout=15)
         accounts = self.meta_accounts()
@@ -800,7 +808,7 @@ class PortalProvisioner:
             (
                 line
                 for line in process_list.splitlines()
-                if BATTERY_STATE_PACKAGE in line
+                if uid1000_host_package in line
             ),
             "",
         )
@@ -1042,9 +1050,9 @@ class PortalProvisioner:
                     else None
                 ),
                 "persistent_host_running": bool(camera_light_host_process),
-                "persistent_host_package": BATTERY_STATE_PACKAGE,
+                "persistent_host_package": uid1000_host_package,
                 "connected_this_boot": (
-                    "watchdog connected uid=1000" in logs
+                    "watchdog connected uid=1000" in camera_light_logs
                 ),
             },
             "provision_manifest": manifest,
@@ -2829,7 +2837,7 @@ class PortalProvisioner:
                 bufsize=1,
             )
             assert process.stdout is not None
-            deadline = time.monotonic() + 300
+            deadline = time.monotonic() + self.target.exploit_timeout_seconds
             while time.monotonic() < deadline:
                 ready, _, _ = select.select([process.stdout], [], [], 1)
                 if not ready:
@@ -2868,6 +2876,45 @@ class PortalProvisioner:
                 if any(marker in line for marker in failure_markers):
                     failed = True
                     break
+
+            if (
+                not success
+                and not failed
+                and self.target.recover_watch_result_after_disconnect
+            ):
+                # Cipher restarts its live adbd when the persistent TCP
+                # property first becomes active. The kernel-side watcher has
+                # already completed cleanup, but that restart can sever the
+                # adb shell before its final marker reaches this pipe. Accept
+                # only the exact, freshly generated success record written by
+                # the same watcher after all actions and cleanup succeeded.
+                recovery_deadline = time.monotonic() + 15
+                while time.monotonic() < recovery_deadline:
+                    try:
+                        self.run(["adb", "connect", self.serial], timeout=5)
+                        watch_result = self.adb_run(
+                            [
+                                "shell",
+                                "cat",
+                                "/data/local/tmp/ghostlock-watch-result.txt",
+                            ],
+                            timeout=5,
+                        ).stdout.strip()
+                    except ProvisionError:
+                        time.sleep(1)
+                        continue
+                    if re.fullmatch(
+                        r"WATCH_CFI_OK=1 STEP=0 ERRNO=0 ROOT=1 "
+                        r"RSTEP=\d+ RERR=\d+",
+                        watch_result,
+                    ):
+                        print(
+                            "NATIVE_ACTIONS_OK actions=watch-result-recovery",
+                            flush=True,
+                        )
+                        success = True
+                        break
+                    time.sleep(1)
 
             print(
                 f"INSTALL_ATTEMPT_RESULT attempt={attempt} "
@@ -3224,8 +3271,11 @@ class PortalProvisioner:
         )
 
     def compile_camera_light_host_speed(self) -> None:
+        if self.target is None:
+            raise ProvisionError("target must be selected before preparing UID 1000")
+        host_package = self.target.uid1000_host_package
         self.adb_run(
-            ["shell", "am", "force-stop", "--user", "0", BATTERY_STATE_PACKAGE],
+            ["shell", "am", "force-stop", "--user", "0", host_package],
             timeout=10,
         )
         result = self.adb_run(
@@ -3237,17 +3287,17 @@ class PortalProvisioner:
                 "-f",
                 "-m",
                 "speed",
-                BATTERY_STATE_PACKAGE,
+                host_package,
             ],
             timeout=120,
         )
         if result.returncode != 0 or "Success" not in result.stdout:
             raise ProvisionError(
-                "could not generate the guarded battery-service ART cache: "
+                "could not generate the guarded UID-1000 host ART cache: "
                 + result.stdout
             )
         print(
-            "CAMERA_LIGHT_ART_CACHE_OK host=platformbatterystate "
+            f"CAMERA_LIGHT_ART_CACHE_OK host={self.target.uid1000_host_label} "
             "compiler_filter=speed"
         )
 
@@ -3264,10 +3314,13 @@ class PortalProvisioner:
         )
 
     def prepare_camera_light_install(self) -> None:
+        if self.target is None:
+            raise ProvisionError("target must be selected before preparing UID 1000")
         installed, _ = self.package_sets()
-        if BATTERY_STATE_PACKAGE not in installed:
+        host_package = self.target.uid1000_host_package
+        if host_package not in installed:
             raise ProvisionError(
-                f"required persistent system package is absent: {BATTERY_STATE_PACKAGE}"
+                f"required persistent system package is absent: {host_package}"
             )
         if self.uid1000_boot_hook_active():
             print(
@@ -3295,7 +3348,12 @@ class PortalProvisioner:
             )
             return
         self.compile_camera_light_host_speed()
-        print("UID1000_BOOT_HOOK_RESTORED host=platformbatterystate")
+        host_label = (
+            self.target.uid1000_host_label
+            if self.target
+            else DEFAULT_UID1000_HOST_PACKAGE.rsplit(".", 1)[-1]
+        )
+        print(f"UID1000_BOOT_HOOK_RESTORED host={host_label}")
 
     def package_sets(self) -> tuple[set[str], set[str]]:
         installed_result = self.adb_run(
@@ -4070,6 +4128,13 @@ class PortalProvisioner:
             self.verify_debloat_restored()
         if self.remove_meta_accounts:
             self.verify_meta_accounts_removed()
+        # Start a newly installed Shizuku helper before the longer camera
+        # checks. Android keeps freshly installed packages stopped until their
+        # first explicit launch, so its BOOT_COMPLETED receiver cannot run yet.
+        if self.shizuku:
+            self.verify_shizuku()
+        if self.remove_shizuku:
+            self.verify_shizuku_removed()
         if (
             self.optimize_presence
             or self.presence_fps_cap is not None
@@ -4091,10 +4156,6 @@ class PortalProvisioner:
             self.verify_privacy_dns()
         if self.allow_app_updates or self.restore_app_verifier:
             self.verify_app_verifier_setting()
-        if self.shizuku:
-            self.verify_shizuku()
-        if self.remove_shizuku:
-            self.verify_shizuku_removed()
         if self.disable_camera_light:
             self.verify_camera_light_disabled()
         if self.restore_camera_light:
@@ -4143,7 +4204,8 @@ class PortalProvisioner:
                     raise ProvisionError(f"SELinux is not enforcing: {selinux!r}")
                 print(
                     "CAMERA_LIGHT_OK watchdog_uid=1000 "
-                    "host=platformbatterystate trigger=persistent_app "
+                    f"host={self.target.uid1000_host_label if self.target else 'unknown'} "
+                    "trigger=persistent_app "
                     "selinux=Enforcing"
                 )
                 return

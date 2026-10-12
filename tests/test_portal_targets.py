@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+
+import pathlib
+import sys
+import unittest
+
+
+REPOSITORY = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPOSITORY / "tools"))
+
+from portal_targets import TARGETS, find_target  # noqa: E402
+
+
+class PortalTargetSelectionTest(unittest.TestCase):
+    def test_every_supported_build_selects_only_its_exact_target(self) -> None:
+        self.assertEqual(len(TARGETS), 3)
+        for target in TARGETS:
+            selected = find_target(
+                target.device,
+                target.fingerprint,
+                target.product_models[0] if target.product_models else None,
+            )
+            self.assertIs(selected, target)
+            self.assertIsNone(
+                find_target(
+                    target.device,
+                    target.fingerprint + ".different",
+                    target.product_models[0] if target.product_models else None,
+                )
+            )
+
+    def test_portal_go_and_first_generation_portal_plus_are_unchanged(self) -> None:
+        terry, cipher, aloha = TARGETS
+        self.assertEqual(terry.key, "portal-go-terry-5051355900018050")
+        self.assertEqual(terry.stack_route, "sendmmsg")
+        self.assertFalse(terry.bundled_simpleperf)
+        self.assertFalse(terry.shell_root_package_actions)
+        self.assertEqual(terry.reclaim_pairs, 64)
+        self.assertEqual(terry.reclaim_sends, 64)
+        self.assertEqual(terry.exploit_timeout_seconds, 300)
+        self.assertFalse(terry.recover_watch_result_after_disconnect)
+        self.assertEqual(
+            terry.uid1000_host_package,
+            "com.facebook.alohasdk.platformbatterystate",
+        )
+
+        self.assertEqual(aloha.key, "portal-plus-aloha-1041515800015050")
+        self.assertEqual(aloha.stack_route, "ptrace")
+        self.assertTrue(aloha.bundled_simpleperf)
+        self.assertTrue(aloha.shell_root_package_actions)
+        self.assertEqual(aloha.reclaim_pairs, 256)
+        self.assertEqual(aloha.reclaim_sends, 256)
+        self.assertEqual(aloha.exploit_timeout_seconds, 300)
+        self.assertFalse(aloha.recover_watch_result_after_disconnect)
+        self.assertEqual(
+            aloha.uid1000_host_package,
+            "com.facebook.alohasdk.platformbatterystate",
+        )
+
+        self.assertEqual(cipher.key, "portal-plus-cipher-4051355900018050")
+        self.assertEqual(cipher.stack_route, "sendmmsg")
+        self.assertFalse(cipher.shell_root_package_actions)
+        self.assertEqual(cipher.reclaim_pairs, 256)
+        self.assertEqual(cipher.reclaim_sends, 256)
+        self.assertEqual(cipher.exploit_timeout_seconds, 120)
+        self.assertTrue(cipher.recover_watch_result_after_disconnect)
+        self.assertEqual(
+            cipher.uid1000_host_package,
+            "com.facebook.alohasdk.platformsecurestate",
+        )
+
+    def test_portal_plus_model_guard_is_enforced(self) -> None:
+        for target in TARGETS:
+            if target.product_models:
+                self.assertIsNone(
+                    find_target(target.device, target.fingerprint, "Portal Go")
+                )
+
+    def test_cipher_cleanup_guard_does_not_change_other_targets(self) -> None:
+        cipher_header = (
+            REPOSITORY
+            / "exploit/targets/portal-cipher-4051355900018050/target.h"
+        ).read_text()
+        terry_header = (
+            REPOSITORY
+            / "exploit/targets/portal-terry-5051355900018050/target.h"
+        ).read_text()
+        aloha_header = (
+            REPOSITORY
+            / "exploit/targets/portal-aloha-1041515800015050/target.h"
+        ).read_text()
+        self.assertIn("#define CONFIGFS_ZERO_GUARD_SIZE 32", cipher_header)
+        self.assertIn("#define CONFIGFS_BINARY_CLEANUP 1", cipher_header)
+        self.assertNotIn("#define CONFIGFS_ZERO_GUARD_SIZE", terry_header)
+        self.assertNotIn("#define CONFIGFS_BINARY_CLEANUP", terry_header)
+        self.assertIn("#define CONFIGFS_ZERO_GUARD_SIZE 32", aloha_header)
+        self.assertNotIn("#define CONFIGFS_BINARY_CLEANUP", aloha_header)
+        self.assertIn("PlatformSecureStateService.apk@classes.dex", cipher_header)
+        self.assertNotIn("PlatformSecureStateService", terry_header)
+        self.assertNotIn("PlatformSecureStateService", aloha_header)
+
+
+if __name__ == "__main__":
+    unittest.main()

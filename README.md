@@ -88,6 +88,7 @@ needs to remain in view during the reboot sequence.
 | --- | --- | --- | --- | --- | --- |
 | Meta Portal Go | `terry` | 10 | `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 | Meta Portal+ (1st generation) | `aloha` | 9 | `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys` | `4.4.153+` | Tested |
+| Meta Portal+ (2nd generation) | `cipher` | 10 | `Facebook/cipher_prod/cipher:10/QKQ1.210213.001/4051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 
 Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
@@ -105,7 +106,6 @@ sources and archived firmware. They are **not supported by the current build**.
 | --- | --- | --- | --- |
 | Meta Portal 10-inch, 2nd generation | `omni` | 10 | Strong candidate with the same QCS605 and 4.9 kernel family as Portal Go. |
 | Meta Portal Mini | `atlas` / `omni` | 10 | Strong candidate expected to share most of the `omni` port. |
-| Meta Portal+ 14-inch (2021) | `cipher` | 10 | Strong candidate with a closely related 4.9 kernel. |
 | Original Meta Portal 10-inch | `aloha` software family | 9 | Different physical model from the tested 15.6-inch Portal+. It may share the port, but its `Portal` product model and exact firmware still require validation. |
 | Meta Portal TV | `ripley` | 9 | Possible with a Linux 4.4 and TV-specific port. |
 
@@ -360,13 +360,15 @@ The conservative debloat profile disables these packages for user 0:
 
 It also disables the matching cloud and background components inside retained
 Meta packages. The exact inventories for every supported model are listed
-below: 196 are disabled on the tested Portal Go firmware and 39 on the tested
-first-generation Portal+ firmware. Component-level targeting removes unused
+below: 196 are disabled on the tested Portal Go and second-generation Portal+
+firmware, and 39 on the tested first-generation Portal+ firmware.
+Component-level targeting removes unused
 work without disabling the camera, audio, presence, media, app-management,
 identity, launcher, or WebView packages that the Portal and Kiosk Satellite
 still need.
 
-On Portal Go, two firmware-owned MQTT entry points are deliberately retained
+On Portal Go and the second-generation Portal+, two firmware-owned MQTT entry
+points are deliberately retained
 because each self-enables before use; disabling either caused a service restart
 loop during testing: `RegisteredMqttSystemBroadcastReceiver` in
 `com.facebook.aloha.system.device` and `MqttService` in
@@ -381,11 +383,12 @@ names across its address space. The component list is maintained in
 `tools/meta_debloat_components.py`.
 
 <details>
-<summary>Meta Portal Go: 196 disabled components</summary>
+<summary>Meta Portal Go and Portal+ (2nd generation): 196 disabled components</summary>
 <p></p>
 
-On firmware `5051355900018050`, the provisioner disables 196 components. The
-two intentionally retained MQTT components are excluded from this inventory.
+On Portal Go firmware `5051355900018050` and Portal+ firmware
+`4051355900018050`, the provisioner disables the same 196 components. The two
+intentionally retained MQTT components are excluded from this inventory.
 
 **Background workers (143)**
 
@@ -864,24 +867,24 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --disable-camera-light
 ```
 
-This optional action keeps the Portal's exremely bright, software-controlled green LED camera-use indicator off. It does not close the camera or change Kiosk Satellite's camera,
+This optional action keeps the Portal's extremely bright, software-controlled green LED camera-use indicator off. It does not close the camera or change Kiosk Satellite's camera,
 gesture, snapshot, presence, or RTSP behavior. The orange light shown when the
 physical camera cover is closed comes from a separate hardware path and remains
 unchanged.
 
 Meta restricts the privacy HAL's global LED reset to UID 1000. The provisioner
 installs a small native watchdog and a fingerprint-specific ART boot hook in
-Meta's persistent Platform Battery State application. On each normal boot, the
+a verified persistent Meta system application. On each normal boot, that
 application starts the watchdog with its existing UID 1000 and `system_app`
 SELinux domain, then continues its original startup. The watchdog reads the
 current LED state and clears it only when asserted, with a periodic fallback.
-It does not run as root, change SELinux enforcement, or replace the battery
+It does not run as root, change SELinux enforcement, or replace the host
 service. The hook uses verified executable padding and refuses to patch any ART
 layout that does not exactly match the supported firmware.
 
 The provisioner requires the watchdog to connect to the privacy service with
 UID 1000 on two separate enforcing boots. Remove the watchdog and regenerate
-the battery application's original ART cache with:
+the host application's original ART cache with:
 
 ```sh
 python3 tools/provision_portal.py \

