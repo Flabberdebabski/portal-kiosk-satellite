@@ -26,6 +26,17 @@ class PortalTarget:
     mm_recycle_slabs: int = 0
     reclaim_pairs: int = 64
     reclaim_sends: int = 64
+    audio_java_fallback: bool = False
+    audio_installer_credentials: bool = False
+    device_owner_system_credentials: bool = False
+    ota_installer_credentials: bool = False
+    meta_accounts_system_credentials: bool = False
+    shell_root_package_actions: bool = False
+    presence_installer_credentials: bool = False
+    ota_packages: tuple[str, ...] = (
+        "com.facebook.aloha.otaui",
+        "com.facebook.aloha.alohaotasetup",
+    )
 
     def preload_path(self, repository: pathlib.Path) -> pathlib.Path:
         return repository / "exploit" / "build" / self.preload_name
@@ -76,6 +87,14 @@ TARGETS = (
         mm_recycle_slabs=20,
         reclaim_pairs=256,
         reclaim_sends=256,
+        audio_java_fallback=True,
+        audio_installer_credentials=True,
+        device_owner_system_credentials=True,
+        ota_installer_credentials=True,
+        meta_accounts_system_credentials=True,
+        shell_root_package_actions=True,
+        presence_installer_credentials=True,
+        ota_packages=("com.facebook.aloha.otaui",),
     ),
 )
 

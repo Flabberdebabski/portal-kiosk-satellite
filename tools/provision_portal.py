@@ -39,8 +39,11 @@ PROVISIONER_BANNER = rf"""
 +----------------------------------------------------------------+
 """.strip()
 HELPER_LOCAL = ROOT / "helper/build/libportal_audio_persist.so"
+HELPER_JAVA_LOCAL = ROOT / "helper/build/libportal_audio_persist_java.so"
 PRELOAD_REMOTE = "/data/local/tmp/preload-portal.so"
 HELPER_REMOTE = "/data/local/tmp/libportal_audio_persist.so"
+AUDIO_CTL_LOCAL = ROOT / "exploit/build/portal-audio-ctl.jar"
+AUDIO_CTL_REMOTE = "/data/local/tmp/portal-audio-ctl.jar"
 ACCOUNT_CTL_LOCAL = ROOT / "exploit/build/portal-account-ctl.jar"
 ACCOUNT_CTL_REMOTE = "/data/local/tmp/portal-account-ctl.jar"
 COMPONENT_CTL_LOCAL = ROOT / "exploit/build/portal-component-ctl.jar"
@@ -209,14 +212,20 @@ class PortalProvisioner:
         self.audio_already_configured = False
         self.restore_audio = restore_audio
         self.device_owner = device_owner
+        self.device_owner_already_configured = False
         self.kiosk_home = kiosk_home
         self.restore_kiosk_home = restore_kiosk_home
         self.disable_updates = disable_updates
+        self.ota_already_configured = False
         self.enable_updates = enable_updates
         self.debloat = debloat
+        self.debloat_already_configured = False
         self.restore_bloat = restore_bloat
         self.remove_meta_accounts = remove_meta_accounts
+        self.meta_accounts_absent = False
+        self.meta_accounts_already_clean = False
         self.optimize_presence = optimize_presence
+        self.presence_already_configured = False
         self.restore_presence_profile = restore_presence_profile
         self.presence_fps_cap = presence_fps_cap
         self.restore_presence_fps = restore_presence_fps
@@ -374,7 +383,17 @@ class PortalProvisioner:
             raise ProvisionError("target must be selected before staging")
         files = [(self.target.preload_path(ROOT), PRELOAD_REMOTE)]
         if self.audio and not self.audio_already_configured:
-            files.append((HELPER_LOCAL, HELPER_REMOTE))
+            helper = (
+                HELPER_JAVA_LOCAL
+                if self.target.audio_java_fallback
+                else HELPER_LOCAL
+            )
+            files.append((helper, HELPER_REMOTE))
+        if self.target.audio_java_fallback and (
+            (self.audio and not self.audio_already_configured)
+            or self.restore_audio
+        ):
+            files.append((AUDIO_CTL_LOCAL, AUDIO_CTL_REMOTE))
         if self.remove_meta_accounts:
             files.append((ACCOUNT_CTL_LOCAL, ACCOUNT_CTL_REMOTE))
         if (
@@ -409,6 +428,8 @@ class PortalProvisioner:
         staged = f"preload={PRELOAD_REMOTE}"
         if self.audio and not self.audio_already_configured:
             staged += f" helper={HELPER_REMOTE}"
+        if AUDIO_CTL_REMOTE in {remote for _, remote in files}:
+            staged += f" audio_ctl={AUDIO_CTL_REMOTE}"
         if self.remove_meta_accounts:
             staged += f" account_ctl={ACCOUNT_CTL_REMOTE}"
         if COMPONENT_CTL_REMOTE in {remote for _, remote in files}:
@@ -476,7 +497,13 @@ class PortalProvisioner:
         if self.privileged_requested() and self.uses_exploit_sentinel():
             candidates.append(EXPLOIT_SENTINEL_LOCAL)
         if self.audio:
-            candidates.append(HELPER_LOCAL)
+            candidates.append(
+                HELPER_JAVA_LOCAL
+                if self.target and self.target.audio_java_fallback
+                else HELPER_LOCAL
+            )
+            if self.target and self.target.audio_java_fallback:
+                candidates.append(AUDIO_CTL_LOCAL)
         if self.remove_meta_accounts:
             candidates.append(ACCOUNT_CTL_LOCAL)
         if self.shizuku:
@@ -563,7 +590,12 @@ class PortalProvisioner:
         device = shell("getprop", "ro.product.device", timeout=5)
         product_model = shell("getprop", "ro.product.model", timeout=5)
         target = find_target(device, fingerprint, product_model)
-        disabled_output = shell("pm", "list", "packages", "-d")
+        ota_packages = (
+            target.ota_packages
+            if target
+            else (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        )
+        disabled_output = shell("pm", "list", "packages", "-d", "-u")
         disabled = {
             line.removeprefix("package:").strip()
             for line in disabled_output.splitlines()
@@ -753,6 +785,12 @@ class PortalProvisioner:
                 "state": (
                     "installed"
                     if audio_installed
+                    or (
+                        target is not None
+                        and target.audio_installer_credentials
+                        and "persistent audio watchdog started" in audio_logs
+                        and "audio processing verified aec=0 ns=0" in audio_logs
+                    )
                     else "restored"
                     if audio_restored
                     else "observed_this_boot"
@@ -773,7 +811,7 @@ class PortalProvisioner:
                     or (
                         all(
                             package in disabled
-                            for package in (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+                            for package in ota_packages
                         )
                         and "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
                     )
@@ -784,7 +822,7 @@ class PortalProvisioner:
                 "installed_marker": ota_installed,
                 "packages_disabled": all(
                     package in disabled
-                    for package in (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+                    for package in ota_packages
                 ),
                 "firmware_gate_false": (
                     "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
@@ -1290,7 +1328,9 @@ class PortalProvisioner:
 
     def app_verifier_package_disabled(self) -> bool:
         disabled = self.adb_run(
-            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+            ["shell", "pm", "list", "packages", "-d", "-u"],
+            timeout=15,
+            check=True,
         ).stdout
         return f"package:{APP_VERIFIER_PACKAGE}" in disabled.splitlines()
 
@@ -1586,7 +1626,9 @@ class PortalProvisioner:
         remote = f"/data/local/tmp/portal-{tag}-install.apk"
         self.adb_run(["push", str(apk), remote], timeout=60, check=True)
         disabled = self.adb_run(
-            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+            ["shell", "pm", "list", "packages", "-d", "-u"],
+            timeout=15,
+            check=True,
         ).stdout
         verifier_was_disabled = "package:com.facebook.appverifier" in disabled
         if self.package_verifier_initially_disabled is None:
@@ -1616,7 +1658,9 @@ class PortalProvisioner:
         if self.package_verifier_initially_disabled is None:
             return
         disabled = self.adb_run(
-            ["shell", "pm", "list", "packages", "-d"], timeout=15, check=True
+            ["shell", "pm", "list", "packages", "-d", "-u"],
+            timeout=15,
+            check=True,
         ).stdout
         actual = "package:com.facebook.appverifier" in disabled
         if actual != self.package_verifier_initially_disabled:
@@ -1829,6 +1873,7 @@ class PortalProvisioner:
 
     def meta_accounts_preflight(self) -> bool:
         accounts = self.meta_accounts()
+        self.meta_accounts_absent = not accounts
         disabled = self.disabled_meta_authenticators()
         hardware_class = META_HARDWARE_AUTHENTICATOR.split("/", 1)[1]
         already_clean = (
@@ -1884,7 +1929,23 @@ class PortalProvisioner:
         if "Device Owner:" in policy and not is_owner:
             raise ProvisionError("another Device Owner is already registered")
         if not is_admin:
-            raise ProvisionError(f"Kiosk Satellite admin is not active: {component}")
+            result = self.adb_run(
+                ["shell", "dpm", "set-active-admin", "--user", "0", component],
+                timeout=15,
+            )
+            policy = self.adb_run(
+                ["shell", "dumpsys", "device_policy"], timeout=15, check=True
+            ).stdout
+            is_admin = (
+                result.returncode == 0
+                and "Enabled Device Admins (User 0" in policy
+                and f"    {component}:" in policy
+            )
+            if not is_admin:
+                raise ProvisionError(
+                    f"Kiosk Satellite admin could not be activated: {component}: "
+                    f"{result.stdout.strip()}"
+                )
         print(
             f"DEVICE_OWNER_PREFLIGHT component={component} "
             f"active_admin=1 already_owner={int(is_owner)}"
@@ -1896,6 +1957,16 @@ class PortalProvisioner:
         installed = self.adb_run(
             ["shell", "test", "-f", marker], timeout=5
         ).returncode == 0
+        if not installed and self.target and self.target.audio_installer_credentials:
+            try:
+                self.verify_watchdog(wait_seconds=5)
+            except ProvisionError:
+                print("AUDIO_PREFLIGHT installed=0 healthy=0 action=install")
+                return False
+            print(
+                "AUDIO_PREFLIGHT installed=private healthy=1 action=skip"
+            )
+            return True
         if not installed:
             print("AUDIO_PREFLIGHT installed=0 healthy=0 action=install")
             return False
@@ -1906,6 +1977,58 @@ class PortalProvisioner:
             return False
         print("AUDIO_PREFLIGHT installed=1 healthy=1 action=skip")
         return True
+
+    def ota_preflight(self) -> bool:
+        disabled = self.adb_run(
+            ["shell", "pm", "list", "packages", "-d", "-u"],
+            timeout=10,
+            check=True,
+        ).stdout
+        packages = (
+            self.target.ota_packages
+            if self.target
+            else (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        )
+        packages_disabled = all(
+            f"package:{package}" in disabled for package in packages
+        )
+        ota_dump = self.adb_run(
+            ["shell", "dumpsys", "facebook.aloha.otaservice"], timeout=10
+        ).stdout
+        gate_false = "getBool(kFirmwareOtaUpdateEnable): false" in ota_dump
+        healthy = packages_disabled and gate_false
+        print(
+            "OTA_PREFLIGHT "
+            f"packages_disabled={int(packages_disabled)} "
+            f"firmware_gate_false={int(gate_false)} "
+            f"action={'skip' if healthy else 'install'}"
+        )
+        return healthy
+
+    def debloat_preflight(self) -> bool:
+        installed, disabled = self.package_sets()
+        packages_complete = all(
+            package not in installed or package in disabled
+            for package in DEBLOAT_PACKAGES
+        )
+        saved = self.read_component_backup(required=False)
+        components_complete = False
+        if saved is not None:
+            current = self.current_component_states()
+            components_complete = all(
+                original == "absent"
+                or component in SELF_MANAGED_DEBLOAT_COMPONENTS
+                or current[component][1] == "disabled"
+                for component, (_, original) in saved.items()
+            )
+        complete = packages_complete and components_complete
+        print(
+            "DEBLOAT_PREFLIGHT "
+            f"packages_complete={int(packages_complete)} "
+            f"components_complete={int(components_complete)} "
+            f"action={'skip' if complete else 'install'}"
+        )
+        return complete
 
     def kaslr_base(self, tag: str) -> int:
         if self.target is None:
@@ -2305,6 +2428,13 @@ class PortalProvisioner:
                     "GHOSTLOCK_AUDIO_PERSIST_SO": HELPER_REMOTE,
                 }
             )
+            if self.target.audio_java_fallback:
+                environment.update(
+                    {
+                        "GHOSTLOCK_AUDIO_CTL_JAVA_DEFERRED": "1",
+                        "GHOSTLOCK_AUDIO_PERSIST_JAR": AUDIO_CTL_REMOTE,
+                    }
+                )
         if self.restore_audio:
             environment.update(
                 {
@@ -2312,13 +2442,119 @@ class PortalProvisioner:
                     "GHOSTLOCK_AUDIO_RESTORE_CTL": "1",
                 }
             )
-        if self.device_owner:
+            if self.target.audio_java_fallback:
+                environment.update(
+                    {
+                        "GHOSTLOCK_AUDIO_CTL_JAVA_FALLBACK": "1",
+                        "GHOSTLOCK_AUDIO_CTL_JAR": AUDIO_CTL_REMOTE,
+                    }
+                )
+        private_audio_action = (
+            self.target.audio_installer_credentials
+            and self.requested_actions()
+            in ({"audio": True}, {"restore_audio": True})
+        )
+        private_owner_action = (
+            self.target.device_owner_system_credentials
+            and self.requested_actions() == {"device_owner": True}
+        )
+        private_ota_action = (
+            self.target.ota_installer_credentials
+            and self.requested_actions()
+            in ({"disable_updates": True}, {"enable_updates": True})
+        )
+        private_meta_action = (
+            self.target.meta_accounts_system_credentials
+            and self.requested_actions() == {"remove_meta_accounts": True}
+            and not self.meta_accounts_absent
+        )
+        private_presence_action = (
+            self.target.presence_installer_credentials
+            and self.requested_actions()
+            in (
+                {"optimize_presence": True},
+                {"restore_presence_profile": True},
+            )
+        )
+        preserve_shell_domain = (
+            self.target.shell_root_package_actions
+            and (
+                (
+                    self.remove_meta_accounts
+                    and not self.meta_accounts_already_clean
+                    and self.meta_accounts_absent
+                    and self.requested_actions()
+                    == {"remove_meta_accounts": True}
+                )
+                or self.requested_actions()
+                in ({"debloat": True}, {"restore_bloat": True})
+            )
+        )
+        credential_action = (
+            private_audio_action
+            or private_owner_action
+            or private_ota_action
+            or private_meta_action
+            or private_presence_action
+        )
+        if credential_action:
+            source_process = (
+                "installd"
+                if private_audio_action or private_ota_action or private_presence_action
+                else "system_server"
+            )
+            process = self.adb_run(
+                ["shell", "pidof", source_process],
+                timeout=5,
+                check=True,
+            ).stdout.strip().split()
+            uid = self.adb_run(
+                [
+                    "shell", "stat", "-c", "%u",
+                    f"/proc/{process[0]}" if process else "/proc/invalid",
+                ],
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+            if not process or not uid.isdigit():
+                raise ProvisionError(
+                    f"could not resolve {source_process} action identity"
+                )
+            environment.update(
+                {
+                    "GHOSTLOCK_ACTION_CREDENTIAL_PID": process[0],
+                    "GHOSTLOCK_ACTION_EXPECT_UID": uid,
+                }
+            )
+            if private_audio_action:
+                environment.update(
+                    {
+                        "GHOSTLOCK_AUDIO_PRIVATE_ONLY": "1",
+                        "GHOSTLOCK_AUDIO_IN_MEMORY_SOURCES": "1",
+                        "GHOSTLOCK_AUDIO_PRESERVE_METADATA": "1",
+                    }
+                )
+            if private_owner_action:
+                environment["GHOSTLOCK_DEVICE_OWNER_PRIVATE_ONLY"] = "1"
+            if private_ota_action:
+                environment["GHOSTLOCK_OTA_PRIVATE_ONLY"] = "1"
+            if private_presence_action:
+                environment["GHOSTLOCK_PRESENCE_PRIVATE_ONLY"] = "1"
+        if preserve_shell_domain:
+            environment["GHOSTLOCK_ACTION_PRESERVE_SELINUX"] = "1"
+        if (
+            self.remove_meta_accounts
+            and not self.meta_accounts_already_clean
+            and self.meta_accounts_absent
+        ):
+            environment["GHOSTLOCK_META_ACCOUNTS_EMPTY"] = "1"
+        if self.device_owner and not self.device_owner_already_configured:
             environment["GHOSTLOCK_KIOSK_DEVICE_OWNER"] = "1"
-        if self.disable_updates:
+        if self.disable_updates and not self.ota_already_configured:
             environment["GHOSTLOCK_OTA_BLOCK"] = "1"
         if self.enable_updates:
             environment["GHOSTLOCK_RESTORE_OTA_BLOCK"] = "1"
-        if self.optimize_presence:
+        if self.optimize_presence and not self.presence_already_configured:
             environment["GHOSTLOCK_PRESENCE_PROFILE"] = "1"
         if self.restore_presence_profile:
             environment["GHOSTLOCK_RESTORE_PRESENCE_PROFILE"] = "1"
@@ -2334,7 +2570,7 @@ class PortalProvisioner:
             environment["GHOSTLOCK_RESTORE_PRESENCE_FPS"] = "1"
             environment["GHOSTLOCK_PRESENCE_REMOVE_KEY"] = "1"
         if (
-            self.debloat
+            (self.debloat and not self.debloat_already_configured)
             or self.restore_bloat
             or self.presence_fps_cap is not None
             or self.restore_presence_fps
@@ -2354,7 +2590,7 @@ class PortalProvisioner:
             )
         if self.restore_presence_fps or self.restore_presence_profile:
             environment["GHOSTLOCK_PRESENCE_PREF_ACTION"] = "restore"
-        if self.remove_meta_accounts:
+        if self.remove_meta_accounts and not self.meta_accounts_already_clean:
             environment.update(
                 {
                     "GHOSTLOCK_REMOVE_META_ACCOUNTS": "1",
@@ -2408,32 +2644,36 @@ class PortalProvisioner:
                 True,
             )
         if self.audio and not self.audio_already_configured:
+            audio_marker = (
+                "PORTAL_AUDIO_JAVA_DEFERRED_OK mode=disabled"
+                if self.target.audio_java_fallback
+                else "PORTAL_AUDIO_NATIVE_OK mode=disabled"
+            )
             expected_markers.update(
                 {
-                    "audio_parameters": (
-                        "PORTAL_AUDIO_NATIVE_OK mode=disabled",
-                        False,
-                    ),
+                    "audio_parameters": (audio_marker, False),
                     "audio_persistence": ("audio persistence install", True),
                 }
             )
         if self.restore_audio:
+            audio_marker = (
+                "PORTAL_AUDIO_JAVA_OK mode=firmware-defaults"
+                if self.target.audio_java_fallback
+                else "PORTAL_AUDIO_NATIVE_OK mode=firmware-defaults"
+            )
             expected_markers.update(
                 {
-                    "audio_defaults": (
-                        "PORTAL_AUDIO_NATIVE_OK mode=firmware-defaults",
-                        False,
-                    ),
+                    "audio_defaults": (audio_marker, False),
                     "audio_restore": ("audio persistence restore", True),
                 }
             )
-        if self.device_owner:
+        if self.device_owner and not self.device_owner_already_configured:
             expected_markers["device_owner"] = ("kiosk device owner install", True)
-        if self.disable_updates:
+        if self.disable_updates and not self.ota_already_configured:
             expected_markers["ota_block"] = ("OTA block file install", True)
         if self.enable_updates:
             expected_markers["ota_restore"] = ("OTA block restore", True)
-        if self.optimize_presence:
+        if self.optimize_presence and not self.presence_already_configured:
             expected_markers["presence_profile"] = (
                 "presence profile install",
                 True,
@@ -2479,12 +2719,12 @@ class PortalProvisioner:
                 "UID1000 presence helper restore",
                 True,
             )
-        if self.debloat or self.restore_bloat:
+        if (self.debloat and not self.debloat_already_configured) or self.restore_bloat:
             expected_markers["component_profile"] = (
                 "component ctl child=",
                 True,
             )
-        if self.remove_meta_accounts:
+        if self.remove_meta_accounts and not self.meta_accounts_already_clean:
             expected_markers["meta_accounts"] = ("Meta account removal", True)
         if self.shizuku:
             expected_markers["shizuku_key"] = (
@@ -2541,6 +2781,13 @@ class PortalProvisioner:
                     print(
                         "NATIVE_ACTIONS_OK actions="
                         + ",".join(sorted(observed_markers)),
+                        flush=True,
+                    )
+                    success = True
+                    break
+                if credential_action and "WATCH_CFI_OK=1" in line:
+                    print(
+                        "NATIVE_ACTIONS_OK actions=credential-scoped",
                         flush=True,
                     )
                     success = True
@@ -2604,7 +2851,12 @@ class PortalProvisioner:
 
     def verify_audio_restored(self, wait_seconds: int = 20) -> None:
         marker = "/data/local/tmp/portal-audio-backup/restored-v1"
-        if self.adb_run(["shell", "test", "-f", marker], timeout=5).returncode != 0:
+        marker_required = not (
+            self.target and self.target.audio_installer_credentials
+        )
+        if marker_required and self.adb_run(
+            ["shell", "test", "-f", marker], timeout=5
+        ).returncode != 0:
             raise ProvisionError("audio restore marker is absent")
         deadline = time.monotonic() + wait_seconds
         logs = ""
@@ -2768,8 +3020,9 @@ class PortalProvisioner:
 
     def disable_ota_packages(self) -> None:
         packages = (
-            OTA_UI_PACKAGE,
-            OTA_SETUP_PACKAGE,
+            self.target.ota_packages
+            if self.target
+            else (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
         )
         for package in packages:
             result = self.adb_run(
@@ -2778,7 +3031,7 @@ class PortalProvisioner:
             )
             if result.returncode != 0 or "new state: disabled-user" not in result.stdout:
                 already_disabled = self.adb_run(
-                    ["shell", "pm", "list", "packages", "-d"],
+                    ["shell", "pm", "list", "packages", "-d", "-u"],
                     timeout=10,
                     check=True,
                 ).stdout
@@ -2788,10 +3041,12 @@ class PortalProvisioner:
                     )
 
     def enable_ota_packages(self) -> None:
-        for package in (
-            OTA_UI_PACKAGE,
-            OTA_SETUP_PACKAGE,
-        ):
+        packages = (
+            self.target.ota_packages
+            if self.target
+            else (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        )
+        for package in packages:
             result = self.adb_run(
                 ["shell", "pm", "enable", "--user", "0", package], timeout=10
             )
@@ -2806,14 +3061,18 @@ class PortalProvisioner:
         if self.adb_run(["shell", "test", "-f", marker], timeout=5).returncode != 0:
             raise ProvisionError("OTA restore marker is absent")
         disabled = self.adb_run(
-            ["shell", "pm", "list", "packages", "-d"], timeout=10, check=True
+            ["shell", "pm", "list", "packages", "-d", "-u"],
+            timeout=10,
+            check=True,
         ).stdout
+        packages = (
+            self.target.ota_packages
+            if self.target
+            else (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        )
         still_disabled = [
             package
-            for package in (
-                OTA_UI_PACKAGE,
-                OTA_SETUP_PACKAGE,
-            )
+            for package in packages
             if f"package:{package}" in disabled
         ]
         if still_disabled:
@@ -2824,11 +3083,15 @@ class PortalProvisioner:
 
     def verify_ota_block(self, wait_seconds: int = 30) -> None:
         disabled = self.adb_run(
-            ["shell", "pm", "list", "packages", "-d"],
+            ["shell", "pm", "list", "packages", "-d", "-u"],
             timeout=10,
             check=True,
         ).stdout
-        required = (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        required = (
+            self.target.ota_packages
+            if self.target
+            else (OTA_UI_PACKAGE, OTA_SETUP_PACKAGE)
+        )
         missing = [
             package
             for package in required
@@ -3157,8 +3420,9 @@ class PortalProvisioner:
             local = pathlib.Path(temporary) / "state.tsv"
             local.write_text(contents, encoding="utf-8")
             self.adb_run(["push", str(local), remote_tmp], timeout=20, check=True)
+        mode = "0644" if remote == DEBLOAT_COMPONENT_ACTIONS_REMOTE else "0600"
         command = (
-            f"chmod 0600 {shlex.quote(remote_tmp)} && "
+            f"chmod {mode} {shlex.quote(remote_tmp)} && "
             f"mv {shlex.quote(remote_tmp)} {shlex.quote(remote)}"
         )
         self.adb_run(["shell", command], timeout=10, check=True)
@@ -3201,6 +3465,11 @@ class PortalProvisioner:
         self.push_text_atomic(
             "# portal-debloat-component-actions-v1\n" + "".join(actions),
             DEBLOAT_COMPONENT_ACTIONS_REMOTE,
+        )
+        self.adb_run(
+            ["shell", "chmod", "0644", DEBLOAT_COMPONENT_ACTIONS_REMOTE],
+            timeout=5,
+            check=True,
         )
         print(
             f"DEBLOAT_COMPONENT_ACTIONS mode={'restore' if restore else 'disable'} "
@@ -3834,6 +4103,33 @@ class PortalProvisioner:
         self.audio_already_configured = (
             self.audio_preflight() if self.audio else False
         )
+        if (
+            self.audio
+            and not self.audio_already_configured
+            and self.target
+            and self.target.audio_installer_credentials
+            and self.requested_actions() != {"audio": True}
+        ):
+            phase_logs = self.log_dir / "audio-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "AUDIO_BOOTSTRAP_PHASE action=install reason=installer-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                audio=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            self.audio_already_configured = self.audio_preflight()
+            if not self.audio_already_configured:
+                raise ProvisionError(
+                    "the dedicated Aloha audio bootstrap did not verify"
+                )
         if self.audio_already_configured and self.requested_actions() == {
             "audio": True
         }:
@@ -3843,10 +4139,165 @@ class PortalProvisioner:
             return
         self.write_state("pending")
         already_owner = self.device_owner_preflight() if self.device_owner else False
+        if (
+            self.device_owner
+            and not already_owner
+            and self.target
+            and self.target.device_owner_system_credentials
+            and self.requested_actions() != {"device_owner": True}
+        ):
+            phase_logs = self.log_dir / "device-owner-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "DEVICE_OWNER_BOOTSTRAP_PHASE action=install "
+                "reason=system-server-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                device_owner=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            already_owner = self.device_owner_preflight()
+            if not already_owner:
+                raise ProvisionError(
+                    "the dedicated Aloha Device Owner bootstrap did not verify"
+                )
+            self.write_state("pending")
+        self.device_owner_already_configured = already_owner
+        self.ota_already_configured = (
+            self.ota_preflight() if self.disable_updates else False
+        )
+        if (
+            self.disable_updates
+            and not self.ota_already_configured
+            and self.target
+            and self.target.ota_installer_credentials
+            and self.requested_actions() != {"disable_updates": True}
+        ):
+            phase_logs = self.log_dir / "ota-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "OTA_BOOTSTRAP_PHASE action=install "
+                "reason=installer-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                disable_updates=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            self.ota_already_configured = self.ota_preflight()
+            if not self.ota_already_configured:
+                raise ProvisionError(
+                    "the dedicated Aloha OTA bootstrap did not verify"
+                )
+            self.write_state("pending")
+        if self.ota_already_configured and self.requested_actions() == {
+            "disable_updates": True
+        }:
+            if resumed_pending:
+                self.write_state("complete")
+            print(
+                f"PROVISION_ALREADY_COMPLETE actions=disable_updates "
+                f"logs={self.log_dir}"
+            )
+            return
         already_meta_clean = (
             self.meta_accounts_preflight() if self.remove_meta_accounts else False
         )
-        if self.debloat:
+        self.meta_accounts_already_clean = already_meta_clean
+        if (
+            self.remove_meta_accounts
+            and not already_meta_clean
+            and self.target
+            and self.target.meta_accounts_system_credentials
+            and self.requested_actions() != {"remove_meta_accounts": True}
+        ):
+            phase_logs = self.log_dir / "meta-accounts-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "META_ACCOUNTS_BOOTSTRAP_PHASE action=remove "
+                "reason=system-server-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                remove_meta_accounts=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            already_meta_clean = self.meta_accounts_preflight()
+            self.meta_accounts_already_clean = already_meta_clean
+            if not already_meta_clean:
+                raise ProvisionError(
+                    "the dedicated Aloha Meta-account cleanup did not verify"
+                )
+            self.write_state("pending")
+        if already_meta_clean and self.requested_actions() == {
+            "remove_meta_accounts": True
+        }:
+            if resumed_pending:
+                self.write_state("complete")
+            print(
+                f"PROVISION_ALREADY_COMPLETE actions=remove_meta_accounts "
+                f"logs={self.log_dir}"
+            )
+            return
+        self.debloat_already_configured = (
+            self.debloat_preflight() if self.debloat else False
+        )
+        if (
+            self.debloat
+            and not self.debloat_already_configured
+            and self.target
+            and self.target.shell_root_package_actions
+            and self.requested_actions() != {"debloat": True}
+        ):
+            phase_logs = self.log_dir / "debloat-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "DEBLOAT_BOOTSTRAP_PHASE action=install "
+                "reason=root-shell-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                debloat=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            self.debloat_already_configured = self.debloat_preflight()
+            if not self.debloat_already_configured:
+                raise ProvisionError(
+                    "the dedicated Aloha component debloat did not verify"
+                )
+            self.write_state("pending")
+        if self.debloat_already_configured and self.requested_actions() == {
+            "debloat": True
+        }:
+            if resumed_pending:
+                self.write_state("complete")
+            print(
+                f"PROVISION_ALREADY_COMPLETE actions=debloat "
+                f"logs={self.log_dir}"
+            )
+            return
+        if self.debloat and not self.debloat_already_configured:
             self.apply_debloat()
         if self.restore_bloat:
             self.restore_debloat()
@@ -3880,9 +4331,9 @@ class PortalProvisioner:
         privileged_action = (
             (self.audio and not self.audio_already_configured)
             or self.restore_audio
-            or self.disable_updates
+            or (self.disable_updates and not self.ota_already_configured)
             or self.enable_updates
-            or self.debloat
+            or (self.debloat and not self.debloat_already_configured)
             or self.restore_bloat
             or self.optimize_presence
             or self.restore_presence_profile
@@ -3922,7 +4373,10 @@ class PortalProvisioner:
         if not self.skip_build:
             build(
                 target=self.target,
-                build_audio=self.audio and not self.audio_already_configured,
+                build_audio=(
+                    (self.audio and not self.audio_already_configured)
+                    or self.restore_audio
+                ),
                 build_account=self.remove_meta_accounts,
                 build_components=(
                     self.debloat
@@ -4021,11 +4475,29 @@ def build(
         ["make", "-C", str(ROOT / "exploit"), "-j2", target.make_target]
     ]
     if build_audio:
-        commands.append(["make", "-C", str(ROOT / "helper"), "native"])
+        helper_target = "native-java" if target.audio_java_fallback else "native"
+        commands.append(["make", "-C", str(ROOT / "helper"), helper_target])
+        if target.audio_java_fallback:
+            commands.append(
+                [
+                    "make", "-C", str(ROOT / "exploit"),
+                    f"PORTAL_TARGET={target.make_target}", "audio-ctl",
+                ]
+            )
     if build_account:
-        commands.append(["make", "-C", str(ROOT / "exploit"), "account-ctl"])
+        commands.append(
+            [
+                "make", "-C", str(ROOT / "exploit"),
+                f"PORTAL_TARGET={target.make_target}", "account-ctl",
+            ]
+        )
     if build_components:
-        commands.append(["make", "-C", str(ROOT / "exploit"), "component-ctl"])
+        commands.append(
+            [
+                "make", "-C", str(ROOT / "exploit"),
+                f"PORTAL_TARGET={target.make_target}", "component-ctl",
+            ]
+        )
     if build_shizuku:
         commands.append(["make", "-C", str(ROOT / "shizuku-helper"), "all"])
     if build_presence:

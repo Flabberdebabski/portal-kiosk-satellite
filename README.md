@@ -352,23 +352,307 @@ The conservative debloat profile disables these packages for user 0:
 - Superframe
 - Meta Contacts
 
-It also disables 196 individual components across retained Meta packages:
-cloud-facing MQTT clients, Firebase receivers and services, diagnostics,
-bug-reporting, push handlers, analytics uploaders, and scheduled background
-workers. Component-level targeting removes unused work without disabling the
-camera, audio, presence, media, app-management, identity, launcher, or WebView
-packages that the Portal and Kiosk Satellite still need.
+It also disables the matching cloud and background components inside retained
+Meta packages. The exact inventories for every supported model are listed
+below: 196 are disabled on the tested Portal Go firmware and 39 on the tested
+first-generation Portal+ firmware. Component-level targeting removes unused
+work without disabling the camera, audio, presence, media, app-management,
+identity, launcher, or WebView packages that the Portal and Kiosk Satellite
+still need.
 
-Two firmware-owned MQTT entry points are deliberately retained because each
-self-enables before use; disabling either caused a service restart loop during
-testing. The remaining MQTT components are disabled. To stop the retained
-core client from reaching Meta, apply a source-specific router rule for the
-Portal or block `mqtt-mini.facebook.com`, `graph.facebook.com`, and
-`facebook.com` with the only DNS resolver advertised to the device. Android's
-opportunistic Private DNS can use any advertised resolver that accepts DNS over
-TLS, so a public fallback resolver can bypass a local DNS block list. Fixed-IP
-rules are brittle because Meta rotates these names across its address space.
-The component list is maintained in `tools/meta_debloat_components.py`.
+On Portal Go, two firmware-owned MQTT entry points are deliberately retained
+because each self-enables before use; disabling either caused a service restart
+loop during testing: `RegisteredMqttSystemBroadcastReceiver` in
+`com.facebook.aloha.system.device` and `MqttService` in
+`com.facebook.alohaservices.alohausers`. The remaining MQTT components are
+disabled. To stop the retained core client from reaching Meta, apply a
+source-specific router rule for the Portal or block `mqtt-mini.facebook.com`,
+`graph.facebook.com`, and `facebook.com` with the only DNS resolver advertised
+to the device. Android's opportunistic Private DNS can use any advertised
+resolver that accepts DNS over TLS, so a public fallback resolver can bypass a
+local DNS block list. Fixed-IP rules are brittle because Meta rotates these
+names across its address space. The component list is maintained in
+`tools/meta_debloat_components.py`.
+
+<details>
+<summary>Meta Portal Go: 196 disabled components</summary>
+
+On firmware `5051355900018050`, the provisioner disables 196 components. The
+two intentionally retained MQTT components are excluded from this inventory.
+
+**Background workers (143)**
+
+- `com.facebook.aloha.app.cameraeditor/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.aloha.system.device/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.aloha.system.services/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.aloha.system.services/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.aloha.system.services/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.aloha.system.services/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.aloha.system.services/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.aloha.system.services/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.aloha.system.services/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.aloha.system.services/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.aloha.system.services/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.aloha.system.services/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.aloha.system.services/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.aloha.system.services/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaappmanager/com.facebook.aloha.app.appmanager.common.periodicwork.PeriodicWorkGuardReceiver`
+- `com.facebook.alohaappmanager/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaappmanager/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaappmanager/com.facebook.aloha.app.appmanager.common.periodicwork.PeriodicWorkAlarmReceiver`
+- `com.facebook.alohaappmanager/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaappmanager/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaappmanager/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaappmanager/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaappmanager/com.facebook.aloha.app.appmanager.common.periodicwork.PeriodicWorkJobService`
+- `com.facebook.alohaappmanager/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaappmanager/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaappmanager/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaappmanager/com.facebook.aloha.app.appmanager.common.downloadmanager.impl.DownloadIdleService`
+- `com.facebook.alohaappmanager/com.facebook.aloha.app.appmanager.appmanager.scheduler.background.SchedulerJobService`
+- `com.facebook.alohaappmanager/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaappmanager/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaappmanager/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaapps.launcher/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaapps.launcher/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaapps.launcher/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaapps.launcher/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaapps.launcher/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaapps.launcher/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaapps.launcher/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaapps.launcher/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaapps.launcher/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaapps.launcher/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaapps.launcher/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaapps.launcher/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaapps.personaluser/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaapps.personaluser/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaapps.personaluser/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaapps.personaluser/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaapps.personaluser/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaapps.personaluser/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaapps.personaluser/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaapps.personaluser/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaapps.personaluser/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaapps.personaluser/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaapps.personaluser/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaapps.personaluser/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaservices.abilitymanager/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaservices.alohausers/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaservices.alohausers/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaservices.alohausers/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaservices.alohausers/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaservices.alohausers/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaservices.alohausers/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaservices.alohausers/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaservices.alohausers/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaservices.alohausers/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaservices.alohausers/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaservices.alohausers/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaservices.alohausers/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaservices.player2/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaservices.player2/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaservices.player2/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaservices.player2/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaservices.player2/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaservices.player2/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaservices.player2/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.alohaservices.player2/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaservices.player2/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaservices.player2/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaservices.player2/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaservices.player2/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.portal.aiservice/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.portal.aiservice/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+
+**Bug reporting (16)**
+
+- `com.facebook.aloha.system.services/com.facebook.aloha.system.services.bugreporter.PillViewService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.MannerModeBroadcastReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.BugReportSystemBroadcastReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.BugReportNonSystemBroadcastReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.PortalTVReportScreenLauncherReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.TraceBroadcastReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.SmartCameraBroadcastReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.bugreporter.core.scheduler.AlarmsBroadcastReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.gui.BugReporterGuiService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.receiver.PushNotificationReceiver`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.core.ReportIntentService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.core.UploadStreamService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.bugreporter.core.scheduler.LollipopBugReportService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.alohacommon.bugreporterlib.AppLogsService`
+- `com.facebook.alohaapps.bugreporter/androidx.work.impl.background.systemjob.SystemJobService`
+- `com.facebook.alohaapps.bugreporter/com.facebook.aloha.system.bugreporter.bishop.BishopSupportService`
+
+**Diagnostics (15)**
+
+- `com.facebook.aloha.app.cameraeditor/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.aloha.cnshealthmonitor/com.facebook.aloha.cnshealthmonitor.CNSHealthMonitorBroadcastReceiver`
+- `com.facebook.aloha.cnshealthmonitor/com.facebook.aloha.cnshealthmonitor.CNSHealthMonitorService`
+- `com.facebook.aloha.system.device/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.aloha.system.services/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.aloha.wifidiagnostic/com.facebook.aloha.wifidiagnostic.WifiDiagnosticBootReceiver`
+- `com.facebook.aloha.wifidiagnostic/com.facebook.aloha.wifidiagnostic.WifiDiagnosticService`
+- `com.facebook.alohaappmanager/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaapps.bugreporter/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaapps.launcher/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaapps.settings/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaservices.abilitymanager/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaservices.alohausers/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaservices.player2/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.portal.aiservice/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+
+**Firebase (12)**
+
+- `com.facebook.aloha.app.cameraeditor/com.google.firebase.iid.FirebaseInstanceIdReceiver`
+- `com.facebook.aloha.app.cameraeditor/com.google.firebase.components.ComponentDiscoveryService`
+- `com.facebook.aloha.app.cameraeditor/com.google.firebase.messaging.FirebaseMessagingService`
+- `com.facebook.aloha.app.cameraeditor/com.google.firebase.provider.FirebaseInitProvider`
+- `com.facebook.aloha.system.device/com.google.firebase.iid.FirebaseInstanceIdReceiver`
+- `com.facebook.aloha.system.device/com.google.firebase.components.ComponentDiscoveryService`
+- `com.facebook.aloha.system.device/com.google.firebase.messaging.FirebaseMessagingService`
+- `com.facebook.aloha.system.device/com.google.firebase.provider.FirebaseInitProvider`
+- `com.facebook.alohaservices.alohausers/com.google.firebase.iid.FirebaseInstanceIdReceiver`
+- `com.facebook.alohaservices.alohausers/com.google.firebase.components.ComponentDiscoveryService`
+- `com.facebook.alohaservices.alohausers/com.google.firebase.messaging.FirebaseMessagingService`
+- `com.facebook.alohaservices.alohausers/com.google.firebase.provider.FirebaseInitProvider`
+
+**MQTT (8)**
+
+- `com.facebook.aloha.app.cameraeditor/com.facebook.push.mqtt.service.MqttPushHelperService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.multiusermqtt.MultiuserMqttService`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.mqtt.service.MqttServiceV2`
+- `com.facebook.aloha.app.cameraeditor/com.facebook.mqttlite.MqttService`
+- `com.facebook.alohaservices.alohausers/com.facebook.push.mqtt.receiver.BootCompleteBroadcastReceiver`
+- `com.facebook.alohaservices.alohausers/com.facebook.mqtt.service.MqttServiceV2`
+- `com.facebook.alohaservices.alohausers/com.facebook.multiusermqtt.MultiuserMqttService`
+- `com.facebook.alohaservices.alohausers/com.facebook.push.mqtt.service.MqttPushHelperService`
+
+**Push notifications (2)**
+
+- `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationBootReceiver`
+- `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService`
+
+</details>
+
+<details>
+<summary>Meta Portal+ (1st generation): 39 disabled components</summary>
+
+On firmware `1041515800015050`, the provisioner disables 39 components.
+
+**Background workers (30)**
+
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.aloha.system.device/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+- `com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.portal.aiservice/com.facebook.analytics.appstatelogger.AppStateIntentService`
+- `com.facebook.portal.aiservice/com.facebook.reportaproblem.base.bugreport.BugReportUploadService`
+- `com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.service.LollipopUploadSafeService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.LollipopConditionalWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService`
+
+**Diagnostics (3)**
+
+- `com.facebook.aloha.system.device/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaapps.settings/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.portal.aiservice/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+
+**Firebase (4)**
+
+- `com.facebook.aloha.system.device/com.google.firebase.iid.FirebaseInstanceIdReceiver`
+- `com.facebook.aloha.system.device/com.google.firebase.components.ComponentDiscoveryService`
+- `com.facebook.aloha.system.device/com.google.firebase.messaging.FirebaseMessagingService`
+- `com.facebook.aloha.system.device/com.google.firebase.provider.FirebaseInitProvider`
+
+**Push notifications (2)**
+
+- `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationBootReceiver`
+- `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService`
+
+</details>
 
 Before changing package state, the provisioner saves the exact enabled,
 disabled, or absent state of every package in
