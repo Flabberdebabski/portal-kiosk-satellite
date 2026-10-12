@@ -28,6 +28,10 @@ class PortalTarget:
     reclaim_sends: int = 64
     exploit_timeout_seconds: int = 300
     recover_watch_result_after_disconnect: bool = False
+    address_discovery_settle_seconds: int = 0
+    address_discovery_reboot_on_failure: bool = False
+    wireless_adb_file_property: str | None = None
+    wireless_adb_uid1000_boot: bool = False
     uid1000_host_package: str = "com.facebook.alohasdk.platformbatterystate"
     uid1000_host_label: str = "platformbatterystate"
     buffer_root_staged_sources: bool = False
@@ -38,6 +42,7 @@ class PortalTarget:
     uid1000_embedded_helper: bool = False
     uid1000_installer_credentials: bool = False
     audio_java_fallback: bool = False
+    audio_deferred_ctl: bool = False
     audio_installer_credentials: bool = False
     device_owner_system_credentials: bool = False
     ota_installer_credentials: bool = False
@@ -136,8 +141,14 @@ TARGETS = (
         reclaim_sends=256,
         exploit_timeout_seconds=120,
         recover_watch_result_after_disconnect=True,
+        address_discovery_settle_seconds=15,
+        address_discovery_reboot_on_failure=True,
         uid1000_host_package="com.facebook.alohasdk.platformsecurestate",
         uid1000_host_label="platformsecurestate",
+        wireless_adb_file_property="service.adb.tcp.port",
+        wireless_adb_uid1000_boot=True,
+        audio_java_fallback=True,
+        audio_deferred_ctl=True,
     ),
     PortalTarget(
         key="portal-plus-aloha-1041515800015050",

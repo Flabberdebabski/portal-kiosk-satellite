@@ -161,6 +161,9 @@ CAMERA_LIGHT_INSTALLED_REMOTE = (
 CAMERA_LIGHT_RESTORED_REMOTE = (
     "/data/local/tmp/portal-camera-light-backup/restored-v1"
 )
+WIRELESS_ADB_INSTALLED_REMOTE = (
+    "/data/local/tmp/portal-wireless-adb-installed-v1"
+)
 UID1000_HOOK_ACTIVE_REMOTE = (
     "/data/local/tmp/portal-uid1000-hook-active-v1"
 )
@@ -292,6 +295,11 @@ class PortalProvisioner:
             self.disable_camera_light
             or self.presence_fps_cap is not None
             or (
+                self.persist_wireless_adb
+                and self.target
+                and self.target.wireless_adb_uid1000_boot
+            )
+            or (
                 self.target
                 and self.target.uid1000_embedded_helper
                 and (
@@ -390,7 +398,7 @@ class PortalProvisioner:
         after = self.connect_after_reboot(before)
         return before, after
 
-    def connect_after_reboot(self, before: str, wait_seconds: int = 180) -> str:
+    def connect_after_reboot(self, before: str, wait_seconds: int = 600) -> str:
         try:
             self.run(["adb", "disconnect", self.serial], timeout=5)
         except ProvisionError:
@@ -910,7 +918,23 @@ class PortalProvisioner:
             "runtime": {
                 "boot_id": shell("cat", "/proc/sys/kernel/random/boot_id", timeout=5),
                 "selinux": shell("getenforce", timeout=5),
-                "wireless_adb_port": shell("getprop", "persist.adb.tcp.port", timeout=5),
+                "wireless_adb_property": (
+                    target.wireless_adb_file_property
+                    if target and target.wireless_adb_file_property
+                    else "persist.adb.tcp.port"
+                ),
+                "wireless_adb_port": shell(
+                    "getprop",
+                    (
+                        target.wireless_adb_file_property
+                        if target and target.wireless_adb_file_property
+                        else "persist.adb.tcp.port"
+                    ),
+                    timeout=5,
+                ),
+                "wireless_adb_persistence_verified": exists(
+                    WIRELESS_ADB_INSTALLED_REMOTE
+                ),
                 "aiservice_pid": shell(
                     "pidof", "com.facebook.portal.aiservice", timeout=5
                 ),
@@ -2651,9 +2675,31 @@ class PortalProvisioner:
             )
         result = self.adb_run(["shell", "bugreportz", "-p"], timeout=180)
         match = re.search(r"OK:(\S+\.zip)", result.stdout)
-        if not match:
-            raise ProvisionError(f"bugreportz failed: {result.stdout[-500:]}")
-        remote = match.group(1)
+        recovered_archive = False
+        if match:
+            remote = match.group(1)
+        else:
+            begun = re.search(r"BEGIN:(\S+\.zip)", result.stdout)
+            if not begun:
+                raise ProvisionError(f"bugreportz failed: {result.stdout[-500:]}")
+            remote = begun.group(1)
+            # Omni can finish and rename the ZIP, then reset adbd before the
+            # client receives the final OK line. Reconnect and validate that
+            # finalized archive instead of discarding a usable capture.
+            self.connect(wait_seconds=600)
+            if self.adb_run(
+                ["shell", "test", "-s", remote], timeout=5
+            ).returncode != 0:
+                raise ProvisionError(
+                    "bugreportz disconnected and its archive is absent: "
+                    + remote
+                )
+            recovered_archive = True
+            print(
+                "BUGREPORT_ARCHIVE_RECOVERED "
+                f"path={remote} returncode={result.returncode}",
+                flush=True,
+            )
         with tempfile.TemporaryDirectory(prefix=f"portal-{tag}-") as temporary:
             local = pathlib.Path(temporary) / "bugreport.zip"
             self.adb_run(["pull", remote, str(local)], timeout=60, check=True)
@@ -2671,6 +2717,8 @@ class PortalProvisioner:
                 if report_name is None:
                     raise ProvisionError("bugreport text is absent from archive")
                 report = archive.read(report_name).decode(errors="replace")
+        if recovered_archive:
+            print("BUGREPORT_ARCHIVE_OK source=finalized-begin", flush=True)
         match = re.search(r"memory\s+: (0x[0-9a-f]+) -", report)
         if not match:
             raise ProvisionError("kernel virtual memory range is absent from bugreport")
@@ -2741,14 +2789,23 @@ class PortalProvisioner:
             environment["GHOSTLOCK_PROC_UID_SENTINEL_NICE"] = "0"
         if self.persist_wireless_adb:
             environment["GHOSTLOCK_ENABLE_WIRELESS_ADB"] = "1"
+            if self.target.wireless_adb_file_property:
+                environment["GHOSTLOCK_WIRELESS_ADB_FILE_PROPERTY"] = (
+                    self.target.wireless_adb_file_property
+                )
+            if self.target.wireless_adb_uid1000_boot:
+                environment["GHOSTLOCK_UID1000_WIRELESS_ADB"] = "1"
         if self.audio and not self.audio_already_configured:
             environment.update(
                 {
-                    "GHOSTLOCK_AUDIO_CTL": "1",
                     "GHOSTLOCK_AUDIO_PERSIST": "1",
                     "GHOSTLOCK_AUDIO_PERSIST_SO": HELPER_REMOTE,
                 }
             )
+            if self.target.audio_deferred_ctl:
+                environment["GHOSTLOCK_AUDIO_CTL_DEFERRED_ONLY"] = "1"
+            else:
+                environment["GHOSTLOCK_AUDIO_CTL"] = "1"
             if self.target.audio_java_fallback:
                 environment.update(
                     {
@@ -4462,17 +4519,25 @@ class PortalProvisioner:
 
     def verify_requested_state(self) -> None:
         if self.persist_wireless_adb:
+            property_name = (
+                self.target.wireless_adb_file_property
+                if self.target and self.target.wireless_adb_file_property
+                else "persist.adb.tcp.port"
+            )
             persistent_port = self.adb_run(
-                ["shell", "getprop", "persist.adb.tcp.port"],
+                ["shell", "getprop", property_name],
                 timeout=5,
                 check=True,
             ).stdout.strip()
             if persistent_port != "5555":
                 raise ProvisionError(
                     "wireless ADB did not persist on TCP port 5555: "
-                    f"persist.adb.tcp.port={persistent_port!r}"
+                    f"{property_name}={persistent_port!r}"
                 )
-            print("WIRELESS_ADB_OK persistent_port=5555")
+            print(
+                "WIRELESS_ADB_OK persistent_port=5555 "
+                f"property={property_name}"
+            )
         if self.audio:
             self.verify_watchdog()
         if self.restore_audio:
@@ -4663,6 +4728,17 @@ class PortalProvisioner:
                 f"unexpected boot changed before verification: {first_boot} -> {before}"
             )
         self.verify_requested_state()
+        if self.persist_wireless_adb:
+            property_name = (
+                self.target.wireless_adb_file_property
+                if self.target and self.target.wireless_adb_file_property
+                else "persist.adb.tcp.port"
+            )
+            self.push_text_atomic(
+                f"property={property_name}\nport=5555\n"
+                f"first_boot={first_boot}\nsecond_boot={second_boot}\n",
+                WIRELESS_ADB_INSTALLED_REMOTE,
+            )
         self.write_state("complete", first_boot, second_boot)
         print(
             f"PROVISION_OK first_boot={first_boot} second_boot={second_boot} "
@@ -4694,21 +4770,34 @@ class PortalProvisioner:
         self.verify_target()
         if self.backup_path:
             self.create_backup_bundle(self.backup_path)
-        persistent_port = self.adb_run(
-            ["shell", "getprop", "persist.adb.tcp.port"],
-            timeout=5,
-            check=True,
-        ).stdout.strip()
+        persistent_property = (
+            self.target.wireless_adb_file_property
+            if self.target and self.target.wireless_adb_file_property
+            else "persist.adb.tcp.port"
+        )
+        if self.target and self.target.wireless_adb_file_property:
+            persistence_verified = self.adb_run(
+                ["shell", "test", "-f", WIRELESS_ADB_INSTALLED_REMOTE],
+                timeout=5,
+            ).returncode == 0
+            persistent_port = "5555" if persistence_verified else ""
+        else:
+            persistent_port = self.adb_run(
+                ["shell", "getprop", persistent_property],
+                timeout=5,
+                check=True,
+            ).stdout.strip()
         self.persist_wireless_adb = (
             self.privileged_requested() and persistent_port != "5555"
         )
         if self.persist_wireless_adb:
             print(
-                "STOCK_ADB_REENABLE_REQUIRED persistent_port=unset\n"
+                "STOCK_ADB_REENABLE_REQUIRED "
+                f"property={persistent_property} persistent_port=unset\n"
                 "Keep USB connected. After every reboot until the exploit "
                 "reports WIRELESS_ADB_OK, enable ADB on the Portal and run "
                 "`adb -d tcpip 5555` from another terminal. The provisioner "
-                "waits up to 180 seconds for each reconnect.",
+                "waits up to 10 minutes for each reconnect.",
                 flush=True,
             )
         self.audio_already_configured = (
@@ -5054,11 +5143,49 @@ class PortalProvisioner:
                         f"boot_id={boot_id}",
                         flush=True,
                     )
+                if self.target.address_discovery_settle_seconds:
+                    print(
+                        "ADDRESS_DISCOVERY_SETTLE "
+                        f"seconds={self.target.address_discovery_settle_seconds}",
+                        flush=True,
+                    )
+                    time.sleep(self.target.address_discovery_settle_seconds)
                 try:
                     base = self.kaslr_base(str(attempt))
                     memstart = self.memstart(str(attempt))
                 except ProvisionError as exc:
                     print(f"ADDRESS_DISCOVERY_RETRY attempt={attempt} error={exc}")
+                    try:
+                        self.connect(wait_seconds=600)
+                        recovered_boot = self.adb_run(
+                            [
+                                "shell",
+                                "cat",
+                                "/proc/sys/kernel/random/boot_id",
+                            ],
+                            timeout=5,
+                            check=True,
+                        ).stdout.strip()
+                        if recovered_boot:
+                            clean_boot_id = recovered_boot
+                            print(
+                                "ADDRESS_DISCOVERY_RECOVERED "
+                                f"boot_id={recovered_boot}",
+                                flush=True,
+                            )
+                            if self.target.address_discovery_reboot_on_failure:
+                                print(
+                                    "ADDRESS_DISCOVERY_REBOOT "
+                                    "reason=unusable-capture",
+                                    flush=True,
+                                )
+                                _, clean_boot_id = self.reboot()
+                    except ProvisionError as reconnect_error:
+                        print(
+                            "ADDRESS_DISCOVERY_RECONNECT_FAILED "
+                            f"error={reconnect_error}",
+                            flush=True,
+                        )
                     continue
                 print(
                     f"RUNTIME_ADDRESSES attempt={attempt} boot_id={boot_id} "

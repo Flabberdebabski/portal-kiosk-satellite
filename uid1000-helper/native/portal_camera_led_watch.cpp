@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
+#include <sys/system_properties.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -29,6 +30,8 @@ constexpr char kCameraEnabled[] =
     PORTAL_UID1000_DATA_DIRECTORY "/camera-led-enabled";
 constexpr char kPresenceFps[] =
     PORTAL_UID1000_DATA_DIRECTORY "/presence-fps";
+constexpr char kWirelessAdbEnabled[] =
+    PORTAL_UID1000_DATA_DIRECTORY "/wireless-adb-enabled";
 constexpr char kClientLibrary[] =
     "/system/lib64/privacystate_client1.0.so";
 constexpr char kConstructor[] =
@@ -235,6 +238,50 @@ int run_command(const char *const arguments[]) {
   _exit(1);
 }
 
+[[noreturn]] void activate_wireless_adb() {
+  // Meta's omni init rules disable adbd late in boot for production builds.
+  // Run after that rule, then keep watching because a failed bugreport can
+  // also stop adbd later in the same boot. The provisioner separately
+  // persists service.adb.tcp.port=5555.
+  sleep(20);
+  for (;;) {
+    char state[PROP_VALUE_MAX]{};
+    bool running =
+        __system_property_get("init.svc.adbd", state) > 0 &&
+        strcmp(state, "running") == 0;
+    if (!running) {
+      errno = 0;
+      int persist_status =
+          __system_property_set("persist.sys.usb.config", "adb");
+      int persist_errno = errno;
+      errno = 0;
+      int none_status = __system_property_set("sys.usb.config", "none");
+      int none_errno = errno;
+      sleep(1);
+      errno = 0;
+      int adb_status = __system_property_set("sys.usb.config", "adb");
+      int adb_errno = errno;
+      __android_log_print(
+          adb_status == 0 ? ANDROID_LOG_INFO : ANDROID_LOG_ERROR,
+          kTag,
+          "wireless ADB activation uid=%d state=%s persist=%d/%d "
+          "none=%d/%d adb=%d/%d",
+          getuid(), state[0] ? state : "unset", persist_status,
+          persist_errno, none_status, none_errno, adb_status, adb_errno);
+    }
+    sleep(10);
+  }
+}
+
+bool omni_wireless_adb_requested() {
+  char device[PROP_VALUE_MAX]{};
+  char port[PROP_VALUE_MAX]{};
+  return __system_property_get("ro.product.device", device) > 0 &&
+      strcmp(device, "omni") == 0 &&
+      __system_property_get("service.adb.tcp.port", port) > 0 &&
+      strcmp(port, "5555") == 0;
+}
+
 }  // namespace
 
 int portal_watchdog_main(int argc, char **argv) {
@@ -251,6 +298,13 @@ int portal_watchdog_main(int argc, char **argv) {
   signal(SIGINT, stop);
 
   bool camera_enabled = access(kCameraEnabled, R_OK) == 0;
+  // Omni's production init rules stop adbd after persistent properties load.
+  // Treat its persisted TCP port as the durable request too, so a reboot can
+  // recover even if the exploit copied this binary but reset before writing
+  // the companion marker.
+  bool wireless_adb_enabled =
+      access(kWirelessAdbEnabled, R_OK) == 0 ||
+      omni_wireless_adb_requested();
   int presence_fps = read_presence_fps();
   for (int index = 1; index < argc; ++index) {
     if (strcmp(argv[index], "--camera") == 0) {
@@ -276,14 +330,31 @@ int portal_watchdog_main(int argc, char **argv) {
                           getuid(), strerror(errno));
     }
   }
+  pid_t wireless_adb_worker = -1;
+  if (wireless_adb_enabled) {
+    wireless_adb_worker = fork();
+    if (wireless_adb_worker == 0) {
+      close(singleton);
+      activate_wireless_adb();
+    }
+    if (wireless_adb_worker < 0) {
+      __android_log_print(ANDROID_LOG_ERROR, kTag,
+                          "could not start wireless ADB worker uid=%d: %s",
+                          getuid(), strerror(errno));
+    }
+  }
 
   if (!camera_enabled) {
     if (presence_worker > 0) {
       int status = 0;
       while (waitpid(presence_worker, &status, 0) < 0 && errno == EINTR) {}
     }
+    if (wireless_adb_worker > 0) {
+      int status = 0;
+      while (waitpid(wireless_adb_worker, &status, 0) < 0 && errno == EINTR) {}
+    }
     close(singleton);
-    return presence_fps != 0 ? 0 : 1;
+    return presence_fps != 0 || wireless_adb_enabled ? 0 : 1;
   }
 
   void *library = dlopen(kClientLibrary, RTLD_NOW | RTLD_LOCAL);

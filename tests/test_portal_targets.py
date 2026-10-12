@@ -94,6 +94,15 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertEqual(omni.reclaim_sends, 256)
         self.assertEqual(omni.exploit_timeout_seconds, 120)
         self.assertTrue(omni.recover_watch_result_after_disconnect)
+        self.assertEqual(omni.address_discovery_settle_seconds, 15)
+        self.assertTrue(omni.address_discovery_reboot_on_failure)
+        self.assertEqual(
+            omni.wireless_adb_file_property,
+            "service.adb.tcp.port",
+        )
+        self.assertTrue(omni.wireless_adb_uid1000_boot)
+        self.assertTrue(omni.audio_java_fallback)
+        self.assertTrue(omni.audio_deferred_ctl)
         self.assertEqual(
             omni.uid1000_host_package,
             "com.facebook.alohasdk.platformsecurestate",
