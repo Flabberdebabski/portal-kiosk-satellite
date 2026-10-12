@@ -45,7 +45,6 @@ Persistent features use focused configuration changes or small boot helpers.
 | [Meta-account removal](#remove-local-meta-accounts) | Removes obsolete local account data while retaining services needed by the camera and Portal. |
 | [Presence optimization](#reduce-aiservice-cpu-use-while-preserving-presence-detection) | Lowers AIService CPU use while preserving full-view, LED-free person detection. |
 | [Presence frame-rate cap](#optional-presence-analysis-frame-rate-cap) | Further reduces analysis work without limiting Kiosk Satellite's RTSP frame rate. |
-| [Camera-indicator recovery](#restore-the-camera-indicator) | Removes the unsafe LED watchdog shipped by earlier releases so detection, snapshots and RTSP streaming remain stable. |
 | [Filtering Private DNS](#configure-dns) | Sends DNS to a chosen DNS-over-TLS resolver for network-level filtering. |
 | [Network-provided DNS](#configure-dns) | Uses the DNS server supplied by the local network, including private LAN hostnames. |
 | [Third-party app updates](#allow-kiosk-satellite-and-third-party-app-updates) | Lets correctly signed Kiosk Satellite and other non-Meta APKs update normally. |
@@ -829,11 +828,11 @@ activity and immediately returns to the configured Home app.
 Android blocks an ordinary background app from opening that activity. The
 provisioner therefore adds the one-shot activation to its narrowly scoped UID
 1000 boot helper. That helper waits for Android and AIService to settle, opens
-the hidden activity, returns to Home, and exits when the camera-indicator
-watchdog is not enabled. It does not depend on Shizuku, ADB, another computer,
-or network access after installation. Both presence rollback commands remove
-the activation configuration; the shared helper remains only if another
-feature still uses it.
+the hidden activity, returns to Home, and exits when no persistent helper task
+remains. It does not depend on Shizuku, ADB, another computer, or network access
+after installation. Both presence rollback commands remove the activation
+configuration; the shared helper remains only if another feature still uses
+it.
 
 The cap is downstream of camera capture. Tests on Portal Go retained the
 camera's normal `[8, 30]` target range while Meta logged a 2 FPS analysis rate.
@@ -855,32 +854,6 @@ python3 tools/provision_portal.py \
 
 `--restore-presence-profile` also removes the cap and helper before restoring
 the complete original presence configuration.
-
-</details>
-
-<a id="restore-the-camera-indicator"></a>
-<details>
-<summary><strong>Recovery:</strong> Restore the green camera indicator</summary>
-<p></p>
-
-Older releases offered `--disable-camera-light`. Do not use that action. Meta's
-camera provider checks that the green indicator remains on while camera 0 is
-open. Clearing it makes the provider reject capture requests, which CameraX
-reports as recoverable error 3 and which interrupts motion detection,
-snapshots, gestures and RTSP streaming.
-
-Restore normal camera operation on a device that installed the old watchdog:
-
-```sh
-python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --restore-camera-light
-```
-
-Current releases reject `--disable-camera-light` and automatically schedule
-this restoration when another provisioning action finds the legacy watchdog.
-The green camera-use indicator must remain enabled for stable capture on the
-supported Meta firmware. The orange physical-cover light remains a separate
-hardware-controlled indicator.
 
 </details>
 
@@ -992,8 +965,8 @@ python3 tools/provision_portal.py \
 
 The report includes exact target support, boot and SELinux state, Kiosk
 Satellite version and Device Owner state, audio and OTA markers, debloat and
-account status, the live presence pipeline, camera-indicator watchdog, Private
-DNS, Shizuku package and server state, and the last provisioning manifest.
+account status, the live presence pipeline, Private DNS, Shizuku package and
+server state, and the last provisioning manifest.
 
 ### Dry-run planning
 
