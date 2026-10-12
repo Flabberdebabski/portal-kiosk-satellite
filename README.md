@@ -45,7 +45,7 @@ Persistent features use focused configuration changes or small boot helpers.
 | [Meta-account removal](#remove-local-meta-accounts) | Removes obsolete local account data while retaining services needed by the camera and Portal. |
 | [Presence optimization](#reduce-aiservice-cpu-use-while-preserving-presence-detection) | Lowers AIService CPU use while preserving full-view, LED-free person detection. |
 | [Presence frame-rate cap](#optional-presence-analysis-frame-rate-cap) | Further reduces analysis work without limiting Kiosk Satellite's RTSP frame rate. |
-| [Green camera-indicator control](#disable-the-green-camera-indicator) | Suppresses the software-controlled bright green camera light while leaving camera features active. |
+| [Camera-indicator recovery](#restore-the-camera-indicator) | Removes the unsafe LED watchdog shipped by earlier releases so detection, snapshots and RTSP streaming remain stable. |
 | [Filtering Private DNS](#configure-dns) | Sends DNS to a chosen DNS-over-TLS resolver for network-level filtering. |
 | [Network-provided DNS](#configure-dns) | Uses the DNS server supplied by the local network, including private LAN hostnames. |
 | [Third-party app updates](#allow-kiosk-satellite-and-third-party-app-updates) | Lets correctly signed Kiosk Satellite and other non-Meta APKs update normally. |
@@ -202,7 +202,6 @@ individual flags.
 Add only the extra features you want:
 
 - `--presence-fps-cap 2` to reduce Meta's presence-analysis rate
-- `--disable-camera-light` to suppress the bright green software camera indicator
 - `--dhcp-dns` or `--privacy-dns HOSTNAME` to change DNS behavior
 - `--shizuku` to install Shizuku with automatic startup
 
@@ -859,39 +858,29 @@ the complete original presence configuration.
 
 </details>
 
-<a id="disable-the-green-camera-indicator"></a>
+<a id="restore-the-camera-indicator"></a>
 <details>
-<summary><strong>Optional add-on:</strong> Disable the green camera indicator</summary>
+<summary><strong>Recovery:</strong> Restore the green camera indicator</summary>
 <p></p>
 
-```sh
-python3 tools/provision_portal.py \
-  --serial "$PORTAL_IP:5555" --disable-camera-light
-```
+Older releases offered `--disable-camera-light`. Do not use that action. Meta's
+camera provider checks that the green indicator remains on while camera 0 is
+open. Clearing it makes the provider reject capture requests, which CameraX
+reports as recoverable error 3 and which interrupts motion detection,
+snapshots, gestures and RTSP streaming.
 
-This optional action keeps the Portal's extremely bright, software-controlled green LED camera-use indicator off. It does not close the camera or change Kiosk Satellite's camera,
-gesture, snapshot, presence, or RTSP behavior. The orange light shown when the
-physical camera cover is closed comes from a separate hardware path and remains
-unchanged.
-
-Meta restricts the privacy HAL's global LED reset to UID 1000. The provisioner
-installs a small native watchdog and a fingerprint-specific ART boot hook in
-a verified persistent Meta system application. On each normal boot, that
-application starts the watchdog with its existing UID 1000 and `system_app`
-SELinux domain, then continues its original startup. The watchdog reads the
-current LED state and clears it only when asserted, with a periodic fallback.
-It does not run as root, change SELinux enforcement, or replace the host
-service. The hook uses verified executable padding and refuses to patch any ART
-layout that does not exactly match the supported firmware.
-
-The provisioner requires the watchdog to connect to the privacy service with
-UID 1000 on two separate enforcing boots. Remove the watchdog and regenerate
-the host application's original ART cache with:
+Restore normal camera operation on a device that installed the old watchdog:
 
 ```sh
 python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --restore-camera-light
 ```
+
+Current releases reject `--disable-camera-light` and automatically schedule
+this restoration when another provisioning action finds the legacy watchdog.
+The green camera-use indicator must remain enabled for stable capture on the
+supported Meta firmware. The orange physical-cover light remains a separate
+hardware-controlled indicator.
 
 </details>
 

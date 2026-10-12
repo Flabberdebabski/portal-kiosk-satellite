@@ -476,24 +476,20 @@ presence profile and optional analysis callback frame-rate cap.
 
 ## Camera indicator result
 
-The green light shown while camera 0 is open is software controlled, but it is
-asserted inside the native camera provider. That provider votes through Meta's
-privacy HAL, which writes the `privacy_green` kernel LED. The HAL keeps votes
-per process and reserves its global reset for UID 1000, while SELinux blocks
-ordinary apps, AIService, and ADB shell from the HIDL service. The provider's
-relevant libraries load only from the AVB-protected vendor partition.
+The green light shown while camera 0 is open is part of Meta's enforced camera
+contract. The native provider asserts it through the privacy HAL and checks the
+HAL state before every capture request. Testing initially established that a
+UID-1000 watchdog could clear the light, but sustained Kiosk Satellite testing
+showed that the provider then logs `LED state is not correct. Rejected.`,
+returns `-ENOSYS`, and closes the camera. CameraX exposes that failure as
+recoverable error 3. Motion detection, snapshots, gestures and RTSP streaming
+all use the same camera and are therefore affected.
 
-The `--disable-camera-light` action now installs a resident UID-1000 watchdog
-that connects through Meta's own `PrivacyStateClient`, observes the aggregate
-LED state, and calls the privileged global `clearLed()` operation whenever the
-green vote is asserted. A low-frequency fallback repairs missed state changes.
-The watchdog suppresses the client library's unconditional per-poll log lines;
-its measured steady-state CPU use was 0.1% immediately after verification.
-
-The orange indication with the physical cover closed is a separate hardware
-path. The kernel exposes no orange LED output, so this action intentionally
-does not affect it. Restore the green software indicator with
-`--restore-camera-light`.
+`--disable-camera-light` is retired and rejected. Current provisioning runs
+automatically restore the indicator if they find the legacy watchdog; users
+can also run `--restore-camera-light` directly. The green indicator must remain
+enabled for stable capture on the supported firmware. The orange indication
+with the physical cover closed remains a separate hardware path.
 
 ## UID-1000 boot hook result
 
@@ -538,7 +534,7 @@ The firmware policy and live process state establish these feature boundaries:
 
 | Function | UID-1000 result | Consequence |
 | --- | --- | --- |
-| Privacy HAL and green camera indicator | Verified working | Keep the current watchdog |
+| Privacy HAL and green camera indicator | UID 1000 can clear it, but the camera provider rejects capture immediately afterward | Keep the watchdog removed and leave the indicator enabled |
 | Android package, settings, app-op, user, and device-policy services | Permitted by the shared UID and framework service policy | Suitable for future fixed-purpose helpers |
 | Camera, virtual-camera, battery-state, MobileConfig, and OTA interfaces | Binder/HIDL access is present | Each API still exposes only its implemented operations; the battery-state HAL is read-only |
 | Meta audio-processing manager | Not directly usable | `system_app` cannot discover the private `fb_audio_manager_service`, and the shared UID is not granted Meta's `PLATFORM_AUDIO` permission; retain the AIService audio watchdog |

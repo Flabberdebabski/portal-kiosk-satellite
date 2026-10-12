@@ -905,6 +905,14 @@ class PortalProvisioner:
         private_uid1000_runtime = bool(
             target and target.uid1000_embedded_helper
         )
+        camera_light_configured = (
+            camera_light_installed
+            if private_uid1000_runtime
+            else exists(self.uid1000_path("camera-led-enabled"))
+        )
+        camera_light_watchdog_running = bool(
+            camera_light_process and camera_light_configured
+        )
         return {
             "schema": 1,
             "serial": self.serial,
@@ -1149,26 +1157,35 @@ class PortalProvisioner:
                 ),
                 "installed_marker": exists(CAMERA_LIGHT_INSTALLED_REMOTE),
                 "restored_marker": exists(CAMERA_LIGHT_RESTORED_REMOTE),
-                "feature_config_present": (
-                    camera_light_installed
-                    if private_uid1000_runtime
-                    else exists(self.uid1000_path("camera-led-enabled"))
-                ),
+                "feature_config_present": camera_light_configured,
                 "helper_present": (
                     bool(camera_light_process)
                     if private_uid1000_runtime
                     else exists(self.uid1000_path("portal-camera-led-watch"))
                 ),
-                "watchdog_running": bool(camera_light_process),
-                "watchdog_user": (
+                "helper_running": bool(camera_light_process),
+                "helper_user": (
                     camera_light_process.split()[0]
                     if camera_light_process
+                    else None
+                ),
+                "watchdog_running": camera_light_watchdog_running,
+                "watchdog_user": (
+                    camera_light_process.split()[0]
+                    if camera_light_watchdog_running
                     else None
                 ),
                 "persistent_host_running": bool(camera_light_host_process),
                 "persistent_host_package": uid1000_host_package,
                 "connected_this_boot": (
                     "watchdog connected uid=1000" in camera_light_logs
+                ),
+                "camera_capture_compatible": not camera_light_configured,
+                "warning": (
+                    "The legacy LED watchdog causes Meta's camera provider "
+                    "to reject capture requests. Run --restore-camera-light."
+                    if camera_light_configured
+                    else None
                 ),
             },
             "provision_manifest": manifest,
@@ -3754,6 +3771,7 @@ class PortalProvisioner:
             for path in (
                 self.uid1000_path("camera-led-enabled"),
                 self.uid1000_path("presence-fps"),
+                self.uid1000_path("wireless-adb-enabled"),
             )
             if self.adb_run(
                 ["shell", "test", "-e", path], timeout=5
@@ -4688,7 +4706,10 @@ class PortalProvisioner:
             retained = any(
                 self.adb_run(["shell", "test", "-e", path], timeout=5).returncode
                 == 0
-                for path in (self.uid1000_path("presence-fps"),)
+                for path in (
+                    self.uid1000_path("presence-fps"),
+                    self.uid1000_path("wireless-adb-enabled"),
+                )
             )
             helper_present = self.adb_run(
                 [
@@ -4768,6 +4789,49 @@ class PortalProvisioner:
                 self.create_backup_bundle(self.backup_path)
             return
         self.verify_target()
+        if self.disable_camera_light:
+            raise ProvisionError(
+                "--disable-camera-light has been retired because Meta's "
+                "camera provider rejects capture requests while its green "
+                "indicator is cleared. This breaks detection, snapshots, "
+                "and RTSP streaming. Use --restore-camera-light on devices "
+                "that previously installed it."
+            )
+        legacy_camera_light = self.adb_run(
+            ["shell", "test", "-f", CAMERA_LIGHT_INSTALLED_REMOTE],
+            timeout=5,
+        ).returncode == 0
+        if not legacy_camera_light and not self.target.uid1000_embedded_helper:
+            legacy_camera_light = self.adb_run(
+                [
+                    "shell",
+                    "test",
+                    "-e",
+                    self.uid1000_path("camera-led-enabled"),
+                ],
+                timeout=5,
+            ).returncode == 0
+        if legacy_camera_light and not self.restore_camera_light:
+            self.restore_camera_light = True
+            print(
+                "CAMERA_LIGHT_AUTO_RESTORE reason=camera-capture-incompatible",
+                flush=True,
+            )
+        if (
+            self.restore_camera_light
+            and self.requested_actions() == {"restore_camera_light": True}
+        ):
+            try:
+                self.verify_camera_light_restored()
+            except ProvisionError:
+                pass
+            else:
+                self.write_state("complete")
+                print(
+                    "PROVISION_ALREADY_COMPLETE actions=restore-camera-light "
+                    f"logs={self.log_dir}"
+                )
+                return
         if self.backup_path:
             self.create_backup_bundle(self.backup_path)
         persistent_property = (
@@ -5410,9 +5474,8 @@ def parse_args() -> argparse.Namespace:
         "--disable-camera-light",
         action="store_true",
         help=(
-            "install a persistent UID-1000 watchdog that clears the green "
-            "software-controlled camera indicator; the orange physical-cover "
-            "light is hardware-controlled"
+            "retired unsafe action; Meta's camera provider rejects capture "
+            "while its green indicator is cleared"
         ),
     )
     camera_light_group.add_argument(
@@ -5603,6 +5666,12 @@ def parse_args() -> argparse.Namespace:
     )
     if args.shizuku_apk and not args.shizuku:
         parser.error("--shizuku-apk requires --shizuku")
+    if args.disable_camera_light:
+        parser.error(
+            "--disable-camera-light has been retired because it breaks camera "
+            "capture. Run --restore-camera-light on previously provisioned "
+            "devices."
+        )
     if args.recover and (selected or args.profile):
         parser.error("--recover resumes its saved action set and cannot take action flags")
     if args.recover and args.backup:

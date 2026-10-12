@@ -2159,3 +2159,27 @@ ADB, not persistent root: the UID-0 action child exists only during the guarded
 one-shot provisioning window. The complete Portal+ feature profile remains to
 be validated separately because the test device does not have Kiosk Satellite
 installed.
+
+171. Sustained camera testing invalidated the earlier camera-light conclusion.
+On a provisioned Portal Go, the UID-1000 watchdog called the privacy HAL's
+global LED reset 63 ms after Kiosk Satellite opened camera 0. The native Smart
+Camera provider then read the cleared state, logged `LED state is not correct.
+Rejected.`, and returned `-38` from the first capture request. CameraX reported
+`ERROR_CAMERA_DEVICE` as recoverable error 3, closed Kiosk Satellite's camera,
+and also caused AIService's camera 1 session to restart. CameraService recorded
+matching LED-policy violations.
+
+After removing the watchdog, the same RTSP endpoint immediately supplied a
+640-by-480 H.264 stream and camera service recorded no LED-policy violation.
+The green indicator is therefore enforced as part of the capture contract on
+the supported firmware, even though software controls its physical state.
+`--disable-camera-light` is retired and rejected. The provisioner retains
+`--restore-camera-light`, automatically schedules that restoration when a
+legacy installation is detected, and reports whether the current state is
+camera-compatible. Restoration now tolerates unrelated files in the shared
+UID-1000 data directory and preserves the presence-FPS or Omni wireless-ADB
+worker when either still needs the common helper. The restoration was then
+verified across two reboots on the Portal+ (`aloha`) and Portal 10 second
+generation (`omni`), in addition to the Portal Go capture test. On `omni`, the
+shared UID-1000 process remains alive for presence and wireless ADB without
+loading the privacy client or touching the camera indicator.
