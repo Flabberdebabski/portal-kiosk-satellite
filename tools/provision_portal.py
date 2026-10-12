@@ -134,6 +134,18 @@ PRESENCE_LOG_MARKER = "Notify people presence"
 PRESENCE_ANALYSIS_FRAME_MARKER = "Frame available for analysis stream"
 PRESENCE_ROI_FRAME_MARKER = "Frame available for roi stream"
 PRESENCE_WIDE_FRAME_MARKER = "Disabled hardware cropping"
+PRESENCE_INSTALLED_REMOTE = (
+    "/data/local/tmp/portal-presence-backup/installed-v1"
+)
+PRESENCE_LOGCAT_REGEX = (
+    "settings_config.xml\\|"
+    "Frame.available.for.analysis.stream\\|"
+    "Frame.available.for.roi.stream\\|"
+    "Disabled.hardware.cropping\\|"
+    "Notify.people.presence\\|"
+    "Setting.AI.Processing.FPS\\|PortalPresence\\|"
+    "CAMERA_SERVICE.not.running\\|privacy.mode"
+)
 CAMERA_SERVICE_COMPONENT = (
     "com.facebook.portal.aiservice/"
     "com.facebook.alohaapp.app.services.CameraService"
@@ -575,6 +587,33 @@ class PortalProvisioner:
         )
         print(f"STATE_MANIFEST status={state_status} path={STATE_REMOTE}")
 
+    @staticmethod
+    def presence_full_scene_active(
+        logs: str, camera: str, target: PortalTarget | None
+    ) -> bool:
+        active_request = camera.split("Tag monitoring disabled", 1)[0]
+        full_sensor_frame = (
+            "com.facebook.alohasdk.dewarp_crop_rect.width"
+            not in active_request
+        )
+        if target and target.presence_full_sensor_width:
+            crop_values: dict[str, float] = {}
+            for coordinate in ("x_start", "y_start", "width"):
+                match = re.search(
+                    rf"dewarp_crop_rect\.{coordinate}[^\n]*\n\s*"
+                    r"\[([0-9.]+)",
+                    active_request,
+                )
+                if match:
+                    crop_values[coordinate] = float(match.group(1))
+            full_sensor_frame = (
+                crop_values.get("x_start") == 0.0
+                and crop_values.get("y_start") == 0.0
+                and crop_values.get("width", 0.0)
+                >= target.presence_full_sensor_width
+            )
+        return PRESENCE_WIDE_FRAME_MARKER in logs and full_sensor_frame
+
     def collect_status(self) -> dict[str, object]:
         def shell(*arguments: str, timeout: int = 15) -> str:
             return self.adb_run(
@@ -615,7 +654,15 @@ class PortalProvisioner:
         default_home = self.current_default_home()
         version_name = re.search(r"\bversionName=([^\s]+)", kiosk_dump)
         version_code = re.search(r"\bversionCode=(\d+)", kiosk_dump)
-        logs = shell("logcat", "-d", "-v", "brief", timeout=20)
+        logs = shell(
+            "logcat",
+            "-d",
+            "-v",
+            "brief",
+            "-e",
+            PRESENCE_LOGCAT_REGEX,
+            timeout=20,
+        )
         connectivity = shell("dumpsys", "connectivity", timeout=20)
         audio_logs = shell("logcat", "-d", "-s", "PortalAudioPersist:*", timeout=10)
         camera = shell("dumpsys", "media.camera", timeout=20)
@@ -686,6 +733,11 @@ class PortalProvisioner:
                 for line in logs.splitlines()
             )
         )
+        required_profile_keys = set(
+            target.presence_runtime_keys
+            if target and target.presence_runtime_keys
+            else PRESENCE_PROFILE_KEYS
+        )
         audio_installed = exists(
             "/data/local/tmp/portal-audio-backup/installed-v1"
         )
@@ -694,9 +746,7 @@ class PortalProvisioner:
         )
         ota_installed = exists("/data/local/tmp/portal-ota-backup/installed-v1")
         ota_restored = exists("/data/local/tmp/portal-ota-backup/restored-v1")
-        presence_installed = exists(
-            "/data/local/tmp/portal-presence-backup/installed-v1"
-        )
+        presence_installed = exists(PRESENCE_INSTALLED_REMOTE)
         presence_restored = exists(
             "/data/local/tmp/portal-presence-backup/restored-v1"
         )
@@ -717,7 +767,10 @@ class PortalProvisioner:
             self.current_component_states() if component_backup is not None else {}
         )
         component_disabled = sum(
-            1 for _, state in component_states.values() if state == "disabled"
+            1
+            for component, (_, state) in component_states.items()
+            if state == "disabled"
+            and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
         )
         presence_helper_dump = shell("dumpsys", "package", PRESENCE_HELPER_PACKAGE)
         presence_uid1000_configured = exists(PRESENCE_UID1000_CONFIG_REMOTE)
@@ -869,7 +922,8 @@ class PortalProvisioner:
             "presence": {
                 "state": (
                     "optimized"
-                    if presence_installed or len(profile_keys) == len(PRESENCE_PROFILE_KEYS)
+                    if presence_installed
+                    or required_profile_keys.issubset(profile_keys)
                     else "restored"
                     if presence_restored
                     else "unknown"
@@ -915,10 +969,8 @@ class PortalProvisioner:
                     PRESENCE_SAVED_KEY_REMOTE
                 ),
                 "profile_keys_loaded": profile_keys,
-                "full_scene_profile": (
-                    PRESENCE_WIDE_FRAME_MARKER in logs
-                    and "com.facebook.alohasdk.dewarp_crop_rect.width"
-                    not in camera.split("Tag monitoring disabled", 1)[0]
+                "full_scene_profile": self.presence_full_scene_active(
+                    logs, camera, target
                 ),
                 "analysis_frames_observed": PRESENCE_ANALYSIS_FRAME_MARKER in logs,
                 "roi_frames_observed": PRESENCE_ROI_FRAME_MARKER in logs,
@@ -2030,6 +2082,23 @@ class PortalProvisioner:
         )
         return complete
 
+    def presence_preflight(self) -> bool:
+        marker_present = self.adb_run(
+            ["shell", "test", "-f", PRESENCE_INSTALLED_REMOTE], timeout=5
+        ).returncode == 0
+        try:
+            self.verify_presence_runtime(
+                require_profile=not marker_present, wait_seconds=90
+            )
+        except ProvisionError as exc:
+            print(f"PRESENCE_PREFLIGHT action=install reason={exc}")
+            return False
+        print(
+            "PRESENCE_PREFLIGHT action=skip profile=active "
+            f"verified_marker={int(marker_present)}"
+        )
+        return True
+
     def kaslr_base(self, tag: str) -> int:
         if self.target is None:
             raise ProvisionError("target must be selected before KASLR discovery")
@@ -3109,20 +3178,27 @@ class PortalProvisioner:
             )
             last_dump = result.stdout
             last_log = self.adb_run(
-                ["shell", "logcat", "-d", "-v", "threadtime"], timeout=15
+                [
+                    "shell",
+                    "logcat",
+                    "-d",
+                    "-v",
+                    "threadtime",
+                    "-e",
+                    "getLatestBooleanWithOptions.*18296358819858434",
+                ],
+                timeout=15,
             ).stdout
             override_loaded = re.search(
                 r"getLatestBooleanWithOptions \[18296358819858434\], "
                 r"latestBoolean: false, source: OVERRIDE",
                 last_log,
             )
-            if (
-                "getBool(kFirmwareOtaUpdateEnable): false" in last_dump
-                and override_loaded
-            ):
+            if "getBool(kFirmwareOtaUpdateEnable): false" in last_dump:
                 print(
                     "OTA_BLOCK_OK packages=disabled "
-                    "firmware_ota_update_enable=false source=OVERRIDE"
+                    "firmware_ota_update_enable=false source="
+                    + ("OVERRIDE" if override_loaded else "effective-config")
                 )
                 return
             time.sleep(2)
@@ -3702,6 +3778,11 @@ class PortalProvisioner:
         analysis_fps_applied = False
         helper_activation = False
         uid1000_configured = expected_analysis_fps is None
+        required_profile_keys = set(
+            self.target.presence_runtime_keys
+            if self.target and self.target.presence_runtime_keys
+            else PRESENCE_PROFILE_KEYS
+        )
         if expected_analysis_fps is not None:
             configured = self.adb_run(
                 ["shell", "cat", PRESENCE_UID1000_CONFIG_REMOTE], timeout=5
@@ -3736,28 +3817,36 @@ class PortalProvisioner:
             camera_appop = " ".join(appops.split()) or "no-operation-recorded"
             camera_allowed = "CAMERA: allow" in appops
             logs = self.adb_run(
-                ["shell", "logcat", "-d", "-v", "brief"], timeout=20
+                [
+                    "shell",
+                    "logcat",
+                    "-d",
+                    "-v",
+                    "brief",
+                    "-e",
+                    PRESENCE_LOGCAT_REGEX,
+                ],
+                timeout=20,
             ).stdout
-            presence_event = PRESENCE_LOG_MARKER in logs
-            presence_no_users = (
+            presence_event = presence_event or PRESENCE_LOG_MARKER in logs
+            presence_no_users = presence_no_users or (
                 "CAMERA_SERVICE not running, but no users found yet" in logs
             )
-            privacy_blocked = any(
+            privacy_blocked = privacy_blocked or any(
                 marker in logs.lower()
                 for marker in (
                     "cannot start privacy mode on",
                     "privacy mode is on",
                 )
             )
-            analysis_frames = PRESENCE_ANALYSIS_FRAME_MARKER in logs
-            roi_frames = PRESENCE_ROI_FRAME_MARKER in logs
-            active_request = camera.split("Tag monitoring disabled", 1)[0]
-            wide_frame = (
-                PRESENCE_WIDE_FRAME_MARKER in logs
-                and "com.facebook.alohasdk.dewarp_crop_rect.width"
-                not in active_request
+            analysis_frames = (
+                analysis_frames or PRESENCE_ANALYSIS_FRAME_MARKER in logs
             )
-            loaded_keys = {
+            roi_frames = roi_frames or PRESENCE_ROI_FRAME_MARKER in logs
+            wide_frame = wide_frame or self.presence_full_scene_active(
+                logs, camera, self.target
+            )
+            loaded_keys.update({
                 key
                 for key, expected in PRESENCE_PROFILE_SETTINGS.items()
                 if any(
@@ -3768,23 +3857,29 @@ class PortalProvisioner:
                     )
                     for line in logs.splitlines()
                 )
-            }
-            analysis_fps_applied = expected_analysis_fps is not None and any(
-                "Setting AI Processing FPS" in line
-                and re.search(
-                    rf"\b{expected_analysis_fps}(?:\.0+)?\b", line
+            })
+            analysis_fps_applied = analysis_fps_applied or (
+                expected_analysis_fps is not None
+                and any(
+                    "Setting AI Processing FPS" in line
+                    and re.search(
+                        rf"\b{expected_analysis_fps}(?:\.0+)?\b", line
+                    )
+                    for line in logs.splitlines()
                 )
-                for line in logs.splitlines()
             )
-            helper_activation = expected_analysis_fps is not None and any(
-                "PortalPresence" in line
-                and f"presence FPS activation complete fps={expected_analysis_fps}"
-                in line
-                and "uid=1000" in line
-                for line in logs.splitlines()
+            helper_activation = helper_activation or (
+                expected_analysis_fps is not None
+                and any(
+                    "PortalPresence" in line
+                    and f"presence FPS activation complete fps={expected_analysis_fps}"
+                    in line
+                    and "uid=1000" in line
+                    for line in logs.splitlines()
+                )
             )
-            config_ready = not require_profile or loaded_keys == set(
-                PRESENCE_PROFILE_KEYS
+            config_ready = not require_profile or required_profile_keys.issubset(
+                loaded_keys
             )
             fps_ready = expected_analysis_fps is None or (
                 analysis_fps_applied
@@ -3834,6 +3929,30 @@ class PortalProvisioner:
                     for name in ("BackgroundDetec", "alohaLivenessMa")
                     if name not in threads
                 ]
+                if require_profile:
+                    self.adb_run(
+                        [
+                            "shell",
+                            "mkdir",
+                            "-p",
+                            "/data/local/tmp/portal-presence-backup",
+                        ],
+                        timeout=5,
+                        check=True,
+                    )
+                    self.push_text_atomic(
+                        "Portal presence profile verified\n",
+                        PRESENCE_INSTALLED_REMOTE,
+                    )
+                    self.adb_run(
+                        [
+                            "shell",
+                            "rm",
+                            "-f",
+                            "/data/local/tmp/portal-presence-backup/restored-v1",
+                        ],
+                        timeout=5,
+                    )
                 print(
                     "PRESENCE_RUNTIME_OK "
                     f"pid={pid.split()[0]} camera=active appop=allow "
@@ -4297,6 +4416,47 @@ class PortalProvisioner:
                 f"logs={self.log_dir}"
             )
             return
+        self.presence_already_configured = (
+            self.presence_preflight() if self.optimize_presence else False
+        )
+        if (
+            self.optimize_presence
+            and not self.presence_already_configured
+            and self.target
+            and self.target.presence_installer_credentials
+            and self.requested_actions() != {"optimize_presence": True}
+        ):
+            phase_logs = self.log_dir / "presence-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "PRESENCE_BOOTSTRAP_PHASE action=install "
+                "reason=installer-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                optimize_presence=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            self.presence_already_configured = self.presence_preflight()
+            if not self.presence_already_configured:
+                raise ProvisionError(
+                    "the dedicated Aloha presence bootstrap did not verify"
+                )
+            self.write_state("pending")
+        if self.presence_already_configured and self.requested_actions() == {
+            "optimize_presence": True
+        }:
+            self.write_state("complete")
+            print(
+                f"PROVISION_ALREADY_COMPLETE actions=optimize_presence "
+                f"logs={self.log_dir}"
+            )
+            return
         if self.debloat and not self.debloat_already_configured:
             self.apply_debloat()
         if self.restore_bloat:
@@ -4335,7 +4495,7 @@ class PortalProvisioner:
             or self.enable_updates
             or (self.debloat and not self.debloat_already_configured)
             or self.restore_bloat
-            or self.optimize_presence
+            or (self.optimize_presence and not self.presence_already_configured)
             or self.restore_presence_profile
             or self.presence_fps_cap is not None
             or self.restore_presence_fps

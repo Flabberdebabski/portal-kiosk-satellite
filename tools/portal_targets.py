@@ -33,6 +33,8 @@ class PortalTarget:
     meta_accounts_system_credentials: bool = False
     shell_root_package_actions: bool = False
     presence_installer_credentials: bool = False
+    presence_runtime_keys: tuple[str, ...] = ()
+    presence_full_sensor_width: float | None = None
     ota_packages: tuple[str, ...] = (
         "com.facebook.aloha.otaui",
         "com.facebook.aloha.alohaotasetup",
@@ -94,6 +96,12 @@ TARGETS = (
         meta_accounts_system_credentials=True,
         shell_root_package_actions=True,
         presence_installer_credentials=True,
+        presence_runtime_keys=(
+            "enable_cv_background_detector_v2",
+            "enable_hardware_cropping",
+            "enable_liveness_metric",
+        ),
+        presence_full_sensor_width=4032.0,
         ota_packages=("com.facebook.aloha.otaui",),
     ),
 )

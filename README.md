@@ -87,7 +87,7 @@ needs to remain in view during the reboot sequence.
 | Model | Codename | Android | Supported firmware fingerprint | Kernel | Status |
 | --- | --- | --- | --- | --- | --- |
 | Meta Portal Go | `terry` | 10 | `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
-| Meta Portal+ (1st generation) | `aloha` | 9 | `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys` | `4.4.153+` | Root and automatic wireless ADB tested; feature profile validation in progress |
+| Meta Portal+ (1st generation) | `aloha` | 9 | `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys` | `4.4.153+` | Tested |
 
 Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
@@ -220,6 +220,7 @@ selective setups, technical details and rollback commands. Features labeled
 <a id="disable-hardware-echo-cancellation-and-noise-suppression"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Disable hardware echo cancellation and noise suppression</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -258,6 +259,7 @@ refuses to replace an unrelated file.
 <a id="make-kiosk-satellite-the-device-owner"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Make Kiosk Satellite the Device Owner</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -281,6 +283,7 @@ automated Device Owner removal action in the provisioner.
 <a id="use-kiosk-satellite-as-the-home-screen"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Use Kiosk Satellite as the home screen</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -309,6 +312,7 @@ python3 tools/provision_portal.py \
 <a id="disable-automatic-meta-firmware-updates"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Disable automatic Meta firmware updates</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -337,6 +341,7 @@ python3 tools/provision_portal.py \
 <a id="disable-unused-meta-applications"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Disable unused Meta applications</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -376,6 +381,7 @@ names across its address space. The component list is maintained in
 
 <details>
 <summary>Meta Portal Go: 196 disabled components</summary>
+<p></p>
 
 On firmware `5051355900018050`, the provisioner disables 196 components. The
 two intentionally retained MQTT components are excluded from this inventory.
@@ -595,9 +601,10 @@ two intentionally retained MQTT components are excluded from this inventory.
 - `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService`
 
 </details>
-
+<p></p>
 <details>
 <summary>Meta Portal+ (1st generation): 39 disabled components</summary>
+<p></p>
 
 On firmware `1041515800015050`, the provisioner disables 39 components.
 
@@ -653,12 +660,13 @@ On firmware `1041515800015050`, the provisioner disables 39 components.
 - `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService`
 
 </details>
-
+<p></p>
 Before changing package state, the provisioner saves the exact enabled,
 disabled, or absent state of every package in
 `/data/local/tmp/portal-debloat-backup-v1.tsv` and every targeted component in
 `/data/local/tmp/portal-debloat-components-backup-v1.tsv`. Restore those saved
 states with:
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -673,6 +681,7 @@ paths across two reboots.
 <a id="remove-local-meta-accounts"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Remove local Meta accounts</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -702,6 +711,7 @@ focus.
 <a id="reduce-aiservice-cpu-use-while-preserving-presence-detection"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Reduce AIService CPU use while preserving presence detection</summary>
+<p></p>
 
 Run:
 
@@ -762,6 +772,7 @@ app's ownership and SELinux label, and refuse to overwrite an unrelated edit.
 <a id="allow-kiosk-satellite-and-third-party-app-updates"></a>
 <details>
 <summary><strong>Included in the kiosk profile:</strong> Allow Kiosk Satellite and third-party app updates</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -795,6 +806,7 @@ python3 tools/provision_portal.py \
 <a id="optional-presence-analysis-frame-rate-cap"></a>
 <details>
 <summary><strong>Optional add-on:</strong> Presence-analysis frame-rate cap</summary>
+<p></p>
 
 The full-scene profile keeps Meta's analysis pipeline busy at its firmware
 rate. To reduce that remaining load, cap only its pose-analysis callback. Two
@@ -844,6 +856,7 @@ the complete original presence configuration.
 <a id="disable-the-green-camera-indicator"></a>
 <details>
 <summary><strong>Optional add-on:</strong> Disable the green camera indicator</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -879,6 +892,7 @@ python3 tools/provision_portal.py \
 <a id="configure-dns"></a>
 <details>
 <summary><strong>Optional add-on:</strong> Configure local or filtering DNS</summary>
+<p></p>
 
 To resolve private LAN zones through the DNS servers advertised by the active
 network, run:
@@ -922,6 +936,7 @@ python3 tools/provision_portal.py \
 <a id="install-shizuku-with-automatic-startup"></a>
 <details>
 <summary><strong>Optional add-on:</strong> Install Shizuku with automatic startup</summary>
+<p></p>
 
 ```sh
 python3 tools/provision_portal.py \
@@ -1032,6 +1047,7 @@ and exits without changing the configuration.
 <a id="how-the-root-exploit-works"></a>
 <details>
 <summary><strong>How the root exploit works</strong></summary>
+<p></p>
 
 The project adapts GhostLock,
 [CVE-2026-43499](https://www.cve.org/CVERecord?id=CVE-2026-43499), to a
@@ -1055,6 +1071,7 @@ another device.
 <a id="running-and-troubleshooting"></a>
 <details>
 <summary><strong>Running and troubleshooting</strong></summary>
+<p></p>
 
 The default maximum is 12 exploit attempts. Change it with `--attempts N`,
 where `N` is between 1 and 100. A failed race normally causes a clean reboot
