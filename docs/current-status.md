@@ -26,6 +26,16 @@ and Linux `4.4.153+`. Its port uses the 4.4 ptrace stack layout, a KGSL-backed
 order-2 reclaim, bugreport-derived `memstart_addr`, and symbols extracted from
 the installed boot image.
 
+The Android 10 target registry also contains tested ports for the
+second-generation Portal+ (`cipher`) build `4051355900018050` and the
+second-generation Portal 10-inch (`omni`) build `3051355900018050`. Both use
+the 4.9 sendmmsg route with their exact product-model guards, firmware
+fingerprints and build artifacts. The complete kiosk profile and optional
+features were verified on both models. Omni additionally uses a UID-1000 boot
+worker because its production init rules stop adbd after persistent properties
+load; the worker restored wireless ADB on two verified reboots while SELinux
+remained enforcing.
+
 The Aloha root stage leaves global SELinux state enforcing. A shell-domain
 controller creates a waiting child, changes only that child's credential to
 UID 0 with full capabilities, and copies PID 1's live SELinux `osid`/`sid`
@@ -38,8 +48,9 @@ Wireless ADB persistence is verified on Aloha. The delegated child set
 `persist.adb.tcp.port=5555` through Android's property service, and ADB returned
 without manual intervention after two distinct reboots. The post-reboot shell
 was UID 2000 in `u:r:shell:s0`, and SELinux remained enforcing. This validates
-the root transport and automatic wireless ADB on the exact Portal+ build; the
-complete Kiosk Satellite feature profile still needs model-specific testing.
+the root transport and automatic wireless ADB on the exact Portal+ build. The
+complete Kiosk Satellite profile and optional features were subsequently
+verified on this model as well.
 
 Privileged provisioning is self-contained on a factory-reset device. Before
 the first clean reboot, the host installs the no-permission debuggable package
