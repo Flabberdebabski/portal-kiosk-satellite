@@ -3087,6 +3087,19 @@ class PortalProvisioner:
             f"enabled={int(enabled)} default={default_home or 'none'}"
         )
 
+    def ensure_kiosk_home(self) -> None:
+        default_home = self.current_default_home()
+        alias_enabled = self.kiosk_home_alias_enabled()
+        if default_home != KIOSK_HOME_COMPONENT or not alias_enabled:
+            print(
+                "KIOSK_HOME_REPAIR "
+                f"previous_default={default_home or 'none'} "
+                f"alias_enabled={int(alias_enabled)}",
+                flush=True,
+            )
+            self.configure_kiosk_home(enabled=True)
+        self.verify_kiosk_home(enabled=True)
+
     def disable_ota_packages(self) -> None:
         packages = (
             self.target.ota_packages
@@ -4043,7 +4056,7 @@ class PortalProvisioner:
         if self.device_owner:
             self.verify_device_owner()
         if self.kiosk_home:
-            self.verify_kiosk_home(enabled=True)
+            self.ensure_kiosk_home()
         if self.restore_kiosk_home:
             self.verify_kiosk_home(enabled=False)
         if self.disable_updates:
@@ -4536,7 +4549,7 @@ class PortalProvisioner:
         )
         if not privileged_action:
             if self.kiosk_home:
-                self.configure_kiosk_home(enabled=True)
+                self.ensure_kiosk_home()
             if self.restore_kiosk_home:
                 self.configure_kiosk_home(enabled=False)
             self.verify_across_two_reboots()
@@ -4614,7 +4627,7 @@ class PortalProvisioner:
                 if self.presence_fps_cap is not None:
                     self.uninstall_presence_helper()
                 if self.kiosk_home:
-                    self.configure_kiosk_home(enabled=True)
+                    self.ensure_kiosk_home()
                 if self.restore_kiosk_home:
                     self.configure_kiosk_home(enabled=False)
                 if (

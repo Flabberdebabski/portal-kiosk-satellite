@@ -296,7 +296,8 @@ Satellite then starts directly after boot and receives every Home press. This
 also prevents Meta's `AlohaInvalidOwnerHomeActivity` from covering the kiosk
 after local Meta accounts are removed. Kiosk Satellite's built-in crash-loop
 fuse releases the HOME role automatically if the app repeatedly fails to
-start.
+start. During provisioning and reboot verification, the provisioner repairs
+the HOME selection automatically if Meta's launcher has reclaimed it.
 
 Kiosk Satellite must already be Device Owner. The complete `--profile kiosk`
 applies the Device Owner record first and then configures HOME. Release the role
