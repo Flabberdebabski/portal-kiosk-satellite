@@ -836,14 +836,16 @@ or network access after installation. Both presence rollback commands remove
 the activation configuration; the shared helper remains only if another
 feature still uses it.
 
-The cap is downstream of camera capture. On the tested Portal Go, the active
-camera request retained its normal `[8, 30]` target range while Meta logged a
-2 FPS analysis rate. Kiosk Satellite RTSP uses a separate Camera2 capture and
-encoder path, so it remains free to stream at its configured frame rate. A
-live 10-second test decoded 56 RTSP frames over 9.98 seconds, about 5.5 FPS from
-the configured roughly 6 FPS stream, while Meta analysis remained at 2 FPS.
-The provisioner verifies the applied analysis rate, full field of view, camera
-request, pose pipeline, and helper activation on two boots.
+The cap is downstream of camera capture. Tests on Portal Go retained the
+camera's normal `[8, 30]` target range while Meta logged a 2 FPS analysis rate.
+A first-generation Portal+ also retained its full field of view and live pose
+pipeline at 2 FPS across two reboots. Kiosk Satellite RTSP uses a separate
+Camera2 capture and encoder path, so it remains free to stream at its configured
+frame rate. A live Portal Go test decoded 56 RTSP frames over 9.98 seconds,
+about 5.5 FPS from the configured roughly 6 FPS stream, while Meta analysis
+remained at 2 FPS. The provisioner verifies the applied analysis rate, full
+field of view, camera request, pose pipeline, and helper activation on two
+boots.
 
 Remove only the cap and helper while keeping the full-scene optimization:
 
@@ -956,8 +958,9 @@ Manager to save it, and checks the result after reboot. The separate
 `--allow-app-updates` action controls whether later third-party updates are
 accepted.
 
-The Portal runs Android 10, where upstream Shizuku cannot automatically start
-ADB mode after boot. The helper solves that limitation entirely on the device:
+Supported Portals run Android 9 or 10, where upstream Shizuku cannot
+automatically start ADB mode after boot. The helper solves that limitation
+entirely on the device:
 it receives Android's normal boot broadcast, connects to the Portal's existing
 ADB daemon at `127.0.0.1:5555`, authenticates with a key generated for that
 Portal, and runs Shizuku's own starter. The temporary-root action authorizes

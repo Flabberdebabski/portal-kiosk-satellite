@@ -1,4 +1,7 @@
     .section .text
+#ifndef PORTAL_UID1000_HELPER_PATH
+#define PORTAL_UID1000_HELPER_PATH "/data/portal-uid1000/portal-camera-led-watch"
+#endif
     .balign 4
     .global portal_uid1000_boot_hook
     .type portal_uid1000_boot_hook, %function
@@ -36,7 +39,7 @@ portal_uid1000_boot_hook:
     ldp     x0, x1, [sp, #0]
     add     sp, sp, #112
 
-    // Re-run the displaced PlatformBatteryStateApp.onCreate instruction.
+    // Re-run the displaced UID-1000 host method's first instruction.
     sub     x16, sp, #0x2000
     // The installer replaces this with a branch to onCreate + 4.
     .word   0x14000000
@@ -59,5 +62,5 @@ child:
     brk     #0
 
 helper_path:
-    .asciz  "/data/portal-uid1000/portal-camera-led-watch"
+    .asciz  PORTAL_UID1000_HELPER_PATH
     .size portal_uid1000_boot_hook, .-portal_uid1000_boot_hook

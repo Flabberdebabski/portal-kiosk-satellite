@@ -54,8 +54,22 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertFalse(aloha.recover_watch_result_after_disconnect)
         self.assertEqual(
             aloha.uid1000_host_package,
-            "com.facebook.alohasdk.platformbatterystate",
+            "com.facebook.alohasdk.virtualcameramanager",
         )
+        self.assertEqual(aloha.uid1000_host_label, "virtualcameramanager")
+        self.assertTrue(aloha.buffer_root_staged_sources)
+        self.assertEqual(
+            aloha.uid1000_data_directory, "/data/misc/adb/portal-uid1000"
+        )
+        self.assertEqual(aloha.uid1000_helper_make_target, "aloha")
+        self.assertEqual(
+            aloha.uid1000_helper_artifact, "portal-camera-led-watch-aloha"
+        )
+        self.assertEqual(
+            aloha.uid1000_hook_artifact, "portal-uid1000-hook-aloha.bin"
+        )
+        self.assertTrue(aloha.uid1000_embedded_helper)
+        self.assertTrue(aloha.uid1000_installer_credentials)
 
         self.assertEqual(cipher.key, "portal-plus-cipher-4051355900018050")
         self.assertEqual(cipher.stack_route, "sendmmsg")
@@ -98,6 +112,18 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertIn("PlatformSecureStateService.apk@classes.dex", cipher_header)
         self.assertNotIn("PlatformSecureStateService", terry_header)
         self.assertNotIn("PlatformSecureStateService", aloha_header)
+        self.assertIn("#define UID1000_ART_APPEND_SEGMENT 1", aloha_header)
+        self.assertIn("VirtualCameraManagerService.apk@classes.dex", aloha_header)
+        self.assertIn("#define UID1000_ART_ONCREATE_OFFSET 0x00004780", aloha_header)
+        self.assertIn("#define UID1000_ART_HOOK_OFFSET 0x0000e000", aloha_header)
+        self.assertIn("#define UID1000_ART_EXPECTED_MAGIC \"oat\\n138\\0\"", aloha_header)
+        self.assertIn("#define CONFIGFS_BUFFER_HELPER_KEYS 1", aloha_header)
+        self.assertIn("#define CONFIGFS_BUFFER_UID1000_SOURCES 1", aloha_header)
+        self.assertIn("#define UID1000_EMBEDDED_HELPER 1", aloha_header)
+        self.assertIn(
+            '#define UID1000_DATA_DIRECTORY "/data/misc/adb/portal-uid1000"',
+            aloha_header,
+        )
 
 
 if __name__ == "__main__":

@@ -19,11 +19,16 @@
 
 namespace {
 
+#ifndef PORTAL_UID1000_DATA_DIRECTORY
+#define PORTAL_UID1000_DATA_DIRECTORY "/data/portal-uid1000"
+#endif
+
 constexpr char kTag[] = "PortalCameraLed";
 constexpr char kPresenceTag[] = "PortalPresence";
 constexpr char kCameraEnabled[] =
-    "/data/portal-uid1000/camera-led-enabled";
-constexpr char kPresenceFps[] = "/data/portal-uid1000/presence-fps";
+    PORTAL_UID1000_DATA_DIRECTORY "/camera-led-enabled";
+constexpr char kPresenceFps[] =
+    PORTAL_UID1000_DATA_DIRECTORY "/presence-fps";
 constexpr char kClientLibrary[] =
     "/system/lib64/privacystate_client1.0.so";
 constexpr char kConstructor[] =
@@ -232,7 +237,7 @@ int run_command(const char *const arguments[]) {
 
 }  // namespace
 
-int main() {
+int portal_watchdog_main(int argc, char **argv) {
   prctl(PR_SET_NAME, "portal-led-watch", 0, 0, 0);
   int singleton = claim_singleton();
   if (singleton < 0) {
@@ -247,6 +252,17 @@ int main() {
 
   bool camera_enabled = access(kCameraEnabled, R_OK) == 0;
   int presence_fps = read_presence_fps();
+  for (int index = 1; index < argc; ++index) {
+    if (strcmp(argv[index], "--camera") == 0) {
+      camera_enabled = true;
+    } else if (strcmp(argv[index], "--fps") == 0 && index + 1 < argc) {
+      char *end = nullptr;
+      long value = strtol(argv[++index], &end, 10);
+      if (end != nullptr && *end == '\0' && value >= 1 && value <= 10) {
+        presence_fps = static_cast<int>(value);
+      }
+    }
+  }
   pid_t presence_worker = -1;
   if (presence_fps != 0) {
     presence_worker = fork();
@@ -342,3 +358,9 @@ int main() {
   close(singleton);
   return 0;
 }
+
+#ifndef PORTAL_WATCHDOG_LIBRARY
+int main(int argc, char **argv) {
+  return portal_watchdog_main(argc, argv);
+}
+#endif
