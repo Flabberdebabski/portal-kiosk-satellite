@@ -2183,3 +2183,40 @@ verified across two reboots on the Portal+ (`aloha`) and Portal 10 second
 generation (`omni`), in addition to the Portal Go capture test. On `omni`, the
 shared UID-1000 process remains alive for presence and wireless ADB without
 loading the privacy client or touching the camera indicator.
+
+172. Evaluated DFReroot and the newer DFRoot implementation as a second-stage
+persistent-root mechanism. DFReroot provides persistent root in the practical
+sense: a durable `android.uid.system` application automatically runs Dirty Frag
+after each boot, uses the resulting page-cache write primitive to execute in a
+privileged process, and loads a KernelSU-supporting kernel module. Each new
+kernel starts without the previous boot's UID-0 state, but DFReroot
+automatically re-establishes it. The initial UID-1000 installation is compatible
+in principle with the Portal's existing GhostLock and ART-cache capabilities,
+but the Dirty Frag root stage is not.
+
+Dirty Frag's xfrm-ESP variant depends on the optimization introduced by
+upstream commit `cac2661c53f3`, which allows ESP input decryption to skip
+`skb_cow_data()` for some nonlinear skbs. Meta's published Portal 4.4 and 4.9
+trees retain the older implementation that unconditionally calls
+`skb_cow_data(skb, 0, &trailer)` before constructing the in-place decrypt
+scatterlist. Static disassembly of the exact installed Aloha, Omni, and Cipher
+kernels independently confirmed a direct call from `esp_input` to
+`skb_cow_data`. The Portal kernels therefore do not contain the vulnerable
+Dirty Frag data path; this is an absence of the vulnerable optimization, not a
+later vendor patch that a variant could bypass.
+
+The released DFReroot application also declares `minSdk=32` and selects only
+Android 12-or-newer GKI module payloads for kernels 5.10 through 6.18. Supported
+Portals run Android 9 or 10 on non-GKI kernels 4.4 or 4.9. Lowering the APK's
+minimum SDK would not supply the missing kernel primitive or a compatible
+module. The Portal Go's running configuration additionally has
+`CONFIG_MODULE_SIG_FORCE=y`, SHA-512 module signing, modversions enabled, and
+Kprobes disabled. A custom 4.4/4.9 module would consequently require Meta's
+trusted module-signing key or a fresh live kernel bypass on every boot, which
+would defeat the purpose of replacing GhostLock.
+
+No DFReroot or Dirty Frag payload was run on a Portal, because source and exact
+binary evidence establish that the required primitive is absent. No device
+behavior changed. Reusable pieces are limited to its general architecture and
+packages.xml tooling; this project already has the useful persistent UID-1000
+portion without gaining persistent root from it.
