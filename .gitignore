@@ -34,5 +34,6 @@ artifacts/*
 __pycache__/
 *.pyc
 
+test-results/*
 .remember
 AGENTS.md
