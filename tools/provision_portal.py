@@ -4219,6 +4219,23 @@ class PortalProvisioner:
         self.verify_target()
         if self.backup_path:
             self.create_backup_bundle(self.backup_path)
+        persistent_port = self.adb_run(
+            ["shell", "getprop", "persist.adb.tcp.port"],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        self.persist_wireless_adb = (
+            self.privileged_requested() and persistent_port != "5555"
+        )
+        if self.persist_wireless_adb:
+            print(
+                "STOCK_ADB_REENABLE_REQUIRED persistent_port=unset\n"
+                "Keep USB connected. After every reboot until the exploit "
+                "reports WIRELESS_ADB_OK, enable ADB on the Portal and run "
+                "`adb -d tcpip 5555` from another terminal. The provisioner "
+                "waits up to 180 seconds for each reconnect.",
+                flush=True,
+            )
         self.audio_already_configured = (
             self.audio_preflight() if self.audio else False
         )
@@ -4249,9 +4266,11 @@ class PortalProvisioner:
                 raise ProvisionError(
                     "the dedicated Aloha audio bootstrap did not verify"
                 )
-        if self.audio_already_configured and self.requested_actions() == {
-            "audio": True
-        }:
+        if (
+            self.audio_already_configured
+            and not self.persist_wireless_adb
+            and self.requested_actions() == {"audio": True}
+        ):
             if resumed_pending:
                 self.write_state("complete")
             print(f"PROVISION_ALREADY_COMPLETE actions=audio logs={self.log_dir}")
@@ -4320,9 +4339,11 @@ class PortalProvisioner:
                     "the dedicated Aloha OTA bootstrap did not verify"
                 )
             self.write_state("pending")
-        if self.ota_already_configured and self.requested_actions() == {
-            "disable_updates": True
-        }:
+        if (
+            self.ota_already_configured
+            and not self.persist_wireless_adb
+            and self.requested_actions() == {"disable_updates": True}
+        ):
             if resumed_pending:
                 self.write_state("complete")
             print(
@@ -4364,9 +4385,11 @@ class PortalProvisioner:
                     "the dedicated Aloha Meta-account cleanup did not verify"
                 )
             self.write_state("pending")
-        if already_meta_clean and self.requested_actions() == {
-            "remove_meta_accounts": True
-        }:
+        if (
+            already_meta_clean
+            and not self.persist_wireless_adb
+            and self.requested_actions() == {"remove_meta_accounts": True}
+        ):
             if resumed_pending:
                 self.write_state("complete")
             print(
@@ -4406,9 +4429,11 @@ class PortalProvisioner:
                     "the dedicated Aloha component debloat did not verify"
                 )
             self.write_state("pending")
-        if self.debloat_already_configured and self.requested_actions() == {
-            "debloat": True
-        }:
+        if (
+            self.debloat_already_configured
+            and not self.persist_wireless_adb
+            and self.requested_actions() == {"debloat": True}
+        ):
             if resumed_pending:
                 self.write_state("complete")
             print(
@@ -4448,9 +4473,11 @@ class PortalProvisioner:
                     "the dedicated Aloha presence bootstrap did not verify"
                 )
             self.write_state("pending")
-        if self.presence_already_configured and self.requested_actions() == {
-            "optimize_presence": True
-        }:
+        if (
+            self.presence_already_configured
+            and not self.persist_wireless_adb
+            and self.requested_actions() == {"optimize_presence": True}
+        ):
             self.write_state("complete")
             print(
                 f"PROVISION_ALREADY_COMPLETE actions=optimize_presence "
@@ -4489,7 +4516,8 @@ class PortalProvisioner:
             )
 
         privileged_action = (
-            (self.audio and not self.audio_already_configured)
+            self.persist_wireless_adb
+            or (self.audio and not self.audio_already_configured)
             or self.restore_audio
             or (self.disable_updates and not self.ota_already_configured)
             or self.enable_updates
@@ -4513,22 +4541,6 @@ class PortalProvisioner:
                 self.configure_kiosk_home(enabled=False)
             self.verify_across_two_reboots()
             return
-
-        persistent_port = self.adb_run(
-            ["shell", "getprop", "persist.adb.tcp.port"],
-            timeout=5,
-            check=True,
-        ).stdout.strip()
-        self.persist_wireless_adb = persistent_port != "5555"
-        if persistent_port != "5555":
-            print(
-                "STOCK_ADB_REENABLE_REQUIRED persistent_port=unset\n"
-                "Keep USB connected. After every reboot until the exploit "
-                "reports WIRELESS_ADB_OK, enable ADB on the Portal and run "
-                "`adb -d tcpip 5555` from another terminal. The provisioner "
-                "waits up to 180 seconds for each reconnect.",
-                flush=True,
-            )
 
         if not self.skip_build:
             build(
