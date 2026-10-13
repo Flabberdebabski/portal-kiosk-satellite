@@ -13,7 +13,7 @@ from portal_targets import TARGETS, find_target  # noqa: E402
 
 class PortalTargetSelectionTest(unittest.TestCase):
     def test_every_supported_build_selects_only_its_exact_target(self) -> None:
-        self.assertEqual(len(TARGETS), 4)
+        self.assertEqual(len(TARGETS), 5)
         for target in TARGETS:
             selected = find_target(
                 target.device,
@@ -30,11 +30,11 @@ class PortalTargetSelectionTest(unittest.TestCase):
             )
 
     def test_portal_go_and_first_generation_portal_plus_are_unchanged(self) -> None:
-        targets = {target.device: target for target in TARGETS}
-        terry = targets["terry"]
-        cipher = targets["cipher"]
-        omni = targets["omni"]
-        aloha = targets["aloha"]
+        targets = {target.key: target for target in TARGETS}
+        terry = targets["portal-go-terry-5051355900018050"]
+        cipher = targets["portal-plus-cipher-4051355900018050"]
+        omni = targets["portal-10-omni-3051355900018050"]
+        aloha = targets["portal-plus-aloha-1041515800015050"]
         self.assertEqual(terry.key, "portal-go-terry-5051355900018050")
         self.assertEqual(terry.stack_route, "sendmmsg")
         self.assertFalse(terry.bundled_simpleperf)
@@ -107,6 +107,46 @@ class PortalTargetSelectionTest(unittest.TestCase):
             omni.uid1000_host_package,
             "com.facebook.alohasdk.platformsecurestate",
         )
+
+    def test_portal_mini_uses_a_distinct_model_guard_on_the_omni_build(
+        self,
+    ) -> None:
+        targets = {target.key: target for target in TARGETS}
+        omni = targets["portal-10-omni-3051355900018050"]
+        mini = targets["portal-mini-omni-3051355900018050"]
+
+        self.assertIs(
+            find_target(mini.device, mini.fingerprint, "PortalMini"), mini
+        )
+        self.assertIs(
+            find_target(omni.device, omni.fingerprint, "Portal"), omni
+        )
+        self.assertIsNone(
+            find_target(mini.device, mini.fingerprint, "Portal+")
+        )
+        for field in (
+            "device",
+            "fingerprint",
+            "kernel",
+            "preload_name",
+            "make_target",
+            "kaslr_pc_offsets",
+            "stack_route",
+            "memstart_strategy",
+            "reclaim_pairs",
+            "reclaim_sends",
+            "exploit_timeout_seconds",
+            "recover_watch_result_after_disconnect",
+            "address_discovery_settle_seconds",
+            "address_discovery_reboot_on_failure",
+            "uid1000_host_package",
+            "uid1000_host_label",
+            "wireless_adb_file_property",
+            "wireless_adb_uid1000_boot",
+            "audio_java_fallback",
+            "audio_deferred_ctl",
+        ):
+            self.assertEqual(getattr(mini, field), getattr(omni, field), field)
 
     def test_portal_plus_model_guard_is_enforced(self) -> None:
         for target in TARGETS:

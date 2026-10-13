@@ -27,14 +27,14 @@ order-2 reclaim, bugreport-derived `memstart_addr`, and symbols extracted from
 the installed boot image.
 
 The Android 10 target registry also contains tested ports for the
-second-generation Portal+ (`cipher`) build `4051355900018050` and the
-second-generation Portal 10-inch (`omni`) build `3051355900018050`. Both use
-the 4.9 sendmmsg route with their exact product-model guards, firmware
-fingerprints and build artifacts. The complete kiosk profile and optional
-features were verified on both models. Omni additionally uses a UID-1000 boot
-worker because its production init rules stop adbd after persistent properties
-load; the worker restored wireless ADB on two verified reboots while SELinux
-remained enforcing.
+second-generation Portal+ (`cipher`) build `4051355900018050`, plus the Portal
+10-inch (second generation) and Portal Mini models that share the `omni` build
+`3051355900018050`. Each target uses the 4.9 sendmmsg route with an exact
+product-model guard, firmware fingerprint and build artifacts. The complete
+kiosk profile and optional features were verified on all three models. Both
+`omni` products use a UID-1000 boot worker because their production init rules
+stop adbd after persistent properties load; the worker restored wireless ADB
+through both verification reboots while SELinux remained enforcing.
 
 The Aloha root stage leaves global SELinux state enforcing. A shell-domain
 controller creates a waiting child, changes only that child's credential to

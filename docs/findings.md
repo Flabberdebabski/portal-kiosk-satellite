@@ -2220,3 +2220,29 @@ binary evidence establish that the required primitive is absent. No device
 behavior changed. Reusable pieces are limited to its general architecture and
 packages.xml tooling; this project already has the useful persistent UID-1000
 portion without gaining persistent root from it.
+
+173. Added and completed a strict port for the Meta Portal Mini. The remote
+unit identifies as `ro.product.model=PortalMini`, `ro.product.device=omni`,
+Android 10, fingerprint
+`Facebook/omni_prod/omni:10/QKQ1.210213.001/3051355900018050:user/prod-keys`,
+and Linux `4.9.227-perf+`. Its live `/proc/version` matched the version embedded
+in the previously extracted exact Omni kernel, and its `/proc/config.gz`
+SHA-256 was the same
+`30369f47b9298393de5f87ccc55a487cce3a82e7d438d046f5b46f9d9f6fd252` as
+the tested second-generation Portal 10-inch. It has the required packages and
+two camera providers. A separate `PortalMini` product-model target reuses that
+exact verified kernel build and exploit configuration while preventing an
+unknown `omni` form factor from matching by device name alone.
+
+The second exploit attempt completed the arbitrary kernel read/write chain,
+ran the delegated UID-0 action child, restored the primitive, and installed the
+full kiosk profile. Two clean verification boots,
+`ab299145-7463-44d6-8307-17fde6cae741` and
+`b533abc4-b0d7-4cf1-8626-2eaeac6fb8d4`, passed with SELinux enforcing. Final
+status confirmed Kiosk Satellite as Device Owner and HOME, persistent audio
+processing disablement, blocked firmware updates, zero remaining Meta
+accounts, all 196 safe component disables, full-scene presence at the optional
+2 FPS analysis cap, DHCP-provided DNS, device-local Shizuku running as shell,
+third-party application updates, and UID-1000 wireless ADB persistence. The
+physical camera cover had to be open for the live presence preflight, as on
+the other camera-equipped models.
