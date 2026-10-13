@@ -71,8 +71,8 @@ The provisioner uses only the Python standard library.
 ### Portal
 
 - An exact model and firmware build listed under [Supported models](#supported-models)
-- The initial on-screen setup (OOBE) completed so developer access and ADB can be enabled
-- Developer access enabled and the host authorized over USB ADB
+- The initial on-screen setup (OOBE) completed so the Debug menu is available
+- ADB enabled in the Portal's Debug menu and the host authorized over USB
 - Wireless ADB enabled for the current boot with `adb -d tcpip 5555`
 - Stable network, a stable IP address and external power for several reboots
 - [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) installed and configured
@@ -146,9 +146,9 @@ export D8="$BUILD_TOOLS/d8"
 
 ### 2. Prepare Kiosk Satellite and the Portal
 
-Complete the Portal's initial on-screen setup before continuing. Developer
-access and ADB are unavailable until the out-of-box experience (OOBE) has
-finished.
+Complete the Portal's initial on-screen setup before continuing. The Debug
+menu and its ADB control are unavailable until the out-of-box experience
+(OOBE) has finished.
 
 Install Kiosk Satellite manually from its
 [GitHub repository](https://github.com/jxlarrea/kiosk-satellite) and open it
@@ -159,8 +159,8 @@ camera/microphone privacy control.
 <a id="connect-to-the-portal"></a>
 ### 3. Connect to the Portal
 
-Stock firmware disables ADB after every reboot. Enable developer access and
-ADB on the Portal, connect the USB data cable, authorize the host and run:
+Stock firmware disables ADB after every reboot. Open the Portal's Debug menu,
+enable ADB, connect the USB data cable, authorize the host and run:
 
 ```sh
 adb -d get-state
@@ -175,10 +175,10 @@ Both state checks must print `device`. Keep USB connected during the first
 provisioning run.
 
 The provisioner begins from a clean reboot. On an unprovisioned Portal, enable
-ADB again on the developer screen and rerun `adb -d tcpip 5555` after every
-reboot until the provisioner prints `WIRELESS_ADB_OK`. Keep a second terminal
-ready for this step. After the first successful exploit, wireless ADB survives
-normal reboots and USB is no longer needed.
+ADB again in the Debug menu and rerun `adb -d tcpip 5555` after every reboot
+until the provisioner prints `WIRELESS_ADB_OK`. Keep a second terminal ready
+for this step. After the first successful exploit, wireless ADB survives normal
+reboots and USB is no longer needed.
 
 ### 4. Confirm compatibility
 
@@ -1050,10 +1050,11 @@ another device.
 
 The default maximum is 12 exploit attempts. Change it with `--attempts N`,
 where `N` is between 1 and 100. A failed race normally causes a clean reboot
-and another attempt. Before `WIRELESS_ADB_OK` has appeared, re-enable ADB on
-the Portal and run `adb -d tcpip 5555` after every reboot. If the Portal remains
-unresponsive, power-cycle it, restore USB and wireless ADB, and rerun the same
-command; completed provisioning actions are designed to be repeatable.
+and another attempt. Before `WIRELESS_ADB_OK` has appeared, re-enable ADB in
+the Portal's Debug menu and run `adb -d tcpip 5555` after every reboot. If the
+Portal remains unresponsive, power-cycle it, restore USB and wireless ADB, and
+rerun the same command; completed provisioning actions are designed to be
+repeatable.
 
 Use `--skip-build` only when the required outputs have already been built and
 have not changed. Every root-backed action requires both the selected exploit

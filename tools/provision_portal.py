@@ -4859,9 +4859,9 @@ class PortalProvisioner:
                 "STOCK_ADB_REENABLE_REQUIRED "
                 f"property={persistent_property} persistent_port=unset\n"
                 "Keep USB connected. After every reboot until the exploit "
-                "reports WIRELESS_ADB_OK, enable ADB on the Portal and run "
-                "`adb -d tcpip 5555` from another terminal. The provisioner "
-                "waits up to 10 minutes for each reconnect.",
+                "reports WIRELESS_ADB_OK, enable ADB in the Portal's Debug "
+                "menu and run `adb -d tcpip 5555` from another terminal. "
+                "The provisioner waits up to 10 minutes for each reconnect.",
                 flush=True,
             )
         self.audio_already_configured = (
