@@ -38,6 +38,7 @@ Persistent features use focused configuration changes or small boot helpers.
 | [Persistent wireless ADB](#enable-only-persistent-wireless-adb) | Keeps ADB available on port 5555 after setup, so future reboots no longer require USB activation. |
 | [Complete kiosk profile](#run-the-provisioner) | Applies the recommended Kiosk Satellite setup with one command. |
 | [Hardware audio processing control](#disable-hardware-echo-cancellation-and-noise-suppression) | Stops the Portal from suppressing microphone audio while its speaker is playing audio or music. |
+| [Kiosk Satellite permissions](#grant-kiosk-satellite-permissions) | Enables the microphone, camera, location, storage, presence sensor, overlays, system settings, usage access and reliable background operation. |
 | [Kiosk Satellite Device Owner](#make-kiosk-satellite-the-device-owner) | Gives Kiosk Satellite Android's strongest kiosk-management role. |
 | [Persistent Kiosk Satellite home](#use-kiosk-satellite-as-the-home-screen) | Starts Kiosk Satellite at boot and keeps obsolete Meta screens out of the way. |
 | [Firmware-update blocking](#disable-automatic-meta-firmware-updates) | Prevents an unexpected Meta update from breaking a known working setup. |
@@ -198,10 +199,10 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
   --profile kiosk
 ```
 
-The `kiosk` profile configures audio, Device Owner, Kiosk Satellite HOME,
-firmware blocking, debloat, Meta-account removal, presence optimization and
-third-party app updates. These core features do not need to be added as
-individual flags.
+The `kiosk` profile configures audio, Kiosk Satellite's required permissions,
+Device Owner, Kiosk Satellite HOME, firmware blocking, debloat, Meta-account
+removal, presence optimization and third-party app updates. These core
+features do not need to be added as individual flags.
 
 Add only the extra features you want:
 
@@ -278,6 +279,30 @@ python3 tools/provision_portal.py \
 
 The restore uses the original loader saved during the first installation and
 refuses to replace an unrelated file.
+
+</details>
+
+<a id="grant-kiosk-satellite-permissions"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Grant Kiosk Satellite permissions</summary>
+<p></p>
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --kiosk-permissions
+```
+
+This grants Kiosk Satellite access to the microphone, camera, location and
+shared storage; enables display-over-other-apps, system-settings and usage
+access; grants the Portal-specific system-log access used by the built-in
+person sensor; and exempts the app from battery optimization. The provisioner
+restarts Kiosk Satellite after granting log access and verifies every grant.
+
+This action does not enable or modify Android accessibility services. It uses
+ordinary ADB shell authority and does not require the root exploit. The grants
+survive reboots and correctly signed application updates. Android revokes the
+runtime permissions if Kiosk Satellite's app data is cleared; rerun this action
+after a data clear.
 
 </details>
 
@@ -997,9 +1022,9 @@ python3 tools/provision_portal.py \
 ```
 
 The report includes exact target support, boot and SELinux state, Kiosk
-Satellite version and Device Owner state, audio and OTA markers, debloat and
-account status, the live presence pipeline, Private DNS, Shizuku package and
-server state, and the last provisioning manifest.
+Satellite version, permissions and Device Owner state, audio and OTA markers,
+debloat and account status, the live presence pipeline, Private DNS, Shizuku
+package and server state, and the last provisioning manifest.
 
 ### Dry-run planning
 
