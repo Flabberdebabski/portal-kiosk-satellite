@@ -35,7 +35,7 @@ Persistent features use focused configuration changes or small boot helpers.
 | Feature | What it does and why it helps |
 | --- | --- |
 | [Temporary root provisioning](#how-the-root-exploit-works) | Opens a short privileged window for selected changes, then returns the Portal to normal enforcing mode. |
-| [Persistent wireless ADB](#connect-to-the-portal) | Keeps ADB available on port 5555 after setup, so future reboots no longer require USB activation. |
+| [Persistent wireless ADB](#enable-only-persistent-wireless-adb) | Keeps ADB available on port 5555 after setup, so future reboots no longer require USB activation. |
 | [Complete kiosk profile](#run-the-provisioner) | Applies the recommended Kiosk Satellite setup with one command. |
 | [Hardware audio processing control](#disable-hardware-echo-cancellation-and-noise-suppression) | Stops the Portal from suppressing microphone audio while its speaker is playing audio or music. |
 | [Kiosk Satellite Device Owner](#make-kiosk-satellite-the-device-owner) | Gives Kiosk Satellite Android's strongest kiosk-management role. |
@@ -219,6 +219,28 @@ The recommended `kiosk` profile already applies every feature labeled
 **Included in the kiosk profile**. Their individual sections remain useful for
 selective setups, technical details and rollback commands. Features labeled
 **Optional add-on** require their own flag.
+
+<a id="enable-only-persistent-wireless-adb"></a>
+<details>
+<summary><strong>Standalone setup:</strong> Enable only persistent wireless ADB</summary>
+<p></p>
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --persistent-wireless-adb
+```
+
+This applies only wireless ADB persistence on TCP port 5555. It does not
+enable audio changes, debloat, Device Owner, presence optimization, Shizuku,
+or the other provisioning features. Wireless ADB persistence is already
+installed automatically whenever another privileged provisioning action runs.
+
+On a stock Portal, continue manually enabling ADB in the Debug menu and running
+`adb -d tcpip 5555` after each provisioning reboot until the command prints
+`WIRELESS_ADB_OK`. Later reboots no longer require the USB host.
+
+</details>
+<p></p>
 
 <a id="disable-hardware-echo-cancellation-and-noise-suppression"></a>
 <details>

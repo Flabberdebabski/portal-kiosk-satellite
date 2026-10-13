@@ -217,6 +217,7 @@ class PortalProvisioner:
         backup_path: pathlib.Path | None = None,
         recover: bool = False,
         skip_build: bool = False,
+        persistent_wireless_adb: bool = False,
         wireless_adb_only: bool = False,
         meta_accounts_local_only: bool = False,
         meta_accounts_auth_only: bool = False,
@@ -268,6 +269,7 @@ class PortalProvisioner:
         self.backup_path = backup_path
         self.recover = recover
         self.skip_build = skip_build
+        self.persistent_wireless_adb = persistent_wireless_adb
         self.wireless_adb_only = wireless_adb_only
         self.meta_accounts_local_only = meta_accounts_local_only
         self.meta_accounts_auth_only = meta_accounts_auth_only
@@ -540,6 +542,7 @@ class PortalProvisioner:
     def requested_actions(self) -> dict[str, object]:
         actions: dict[str, object] = {}
         for name in (
+            "persistent_wireless_adb",
             "audio",
             "restore_audio",
             "device_owner",
@@ -1220,6 +1223,7 @@ class PortalProvisioner:
     def privileged_requested(self) -> bool:
         return any(
             (
+                self.persistent_wireless_adb,
                 self.wireless_adb_only,
                 self.audio,
                 self.restore_audio,
@@ -2167,6 +2171,7 @@ class PortalProvisioner:
         if not isinstance(actions, dict):
             raise ProvisionError("pending state has no action map")
         allowed = set(self.requested_actions()) | {
+            "persistent_wireless_adb",
             "audio",
             "restore_audio",
             "device_owner",
@@ -5659,6 +5664,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--serial", default="192.168.1.72:5555")
     parser.add_argument("--attempts", type=int, default=12)
     parser.add_argument(
+        "--persistent-wireless-adb",
+        action="store_true",
+        help=(
+            "make wireless ADB on TCP port 5555 survive reboots without "
+            "applying any other provisioning feature"
+        ),
+    )
+    parser.add_argument(
         "--profile",
         choices=("kiosk",),
         help="select the complete, tested Kiosk Satellite provisioning profile",
@@ -5926,6 +5939,7 @@ def parse_args() -> argparse.Namespace:
         args.allow_app_updates = True
     selected = any(
         (
+            args.persistent_wireless_adb,
             args.audio,
             args.restore_audio,
             args.device_owner,
@@ -6015,6 +6029,7 @@ def main() -> int:
             backup_path=args.backup,
             recover=args.recover,
             skip_build=args.skip_build,
+            persistent_wireless_adb=args.persistent_wireless_adb,
         ).provision()
     except (ProvisionError, OSError, zipfile.BadZipFile) as exc:
         print(f"PROVISION_ERROR: {exc}", file=sys.stderr)
