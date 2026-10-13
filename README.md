@@ -87,6 +87,7 @@ needs to remain in view during the reboot sequence.
 | Model | Codename | Android | Supported firmware fingerprint | Kernel | Status |
 | --- | --- | --- | --- | --- | --- |
 | Meta Portal Go | `terry` | 10 | `Facebook/terry_prod/terry:10/QKQ1.210213.001/5051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
+| Meta Portal 10-inch (1st generation) | `aloha` | 9 | `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys` | `4.4.153+` | Tested |
 | Meta Portal+ (1st generation) | `aloha` | 9 | `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys` | `4.4.153+` | Tested |
 | Meta Portal+ (2nd generation) | `cipher` | 10 | `Facebook/cipher_prod/cipher:10/QKQ1.210213.001/4051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 | Meta Portal 10-inch (2nd generation) | `omni` | 10 | `Facebook/omni_prod/omni:10/QKQ1.210213.001/3051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
@@ -95,9 +96,9 @@ needs to remain in view during the reboot sequence.
 Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
 The `aloha` software family is shared by more than one first-generation form
-factor. The tested target additionally requires `ro.product.model=Portal+`;
-an original 10-inch unit reporting `ro.product.model=Portal` is still a
-different, unverified model.
+factor. The original 10-inch Portal and 15.6-inch Portal+ share their firmware
+and kernel port, but the provisioner keeps separate exact product-model guards
+for `Portal` and `Portal+`.
 
 ## Possible supported devices
 
@@ -106,7 +107,6 @@ sources and archived firmware. They are **not supported by the current build**.
 
 | Model | Family | Android | Porting outlook |
 | --- | --- | --- | --- |
-| Original Meta Portal 10-inch | `aloha` software family | 9 | Different physical model from the tested 15.6-inch Portal+. It may share the port, but its `Portal` product model and exact firmware still require validation. |
 | Meta Portal TV | `ripley` | 9 | Possible with a Linux 4.4 and TV-specific port. |
 
 To request support, open an issue with the retail model and this output. Do
@@ -365,7 +365,8 @@ It also disables the matching cloud and background components inside retained
 Meta packages. The exact inventories for every supported model are listed
 below: 196 are disabled on the tested Portal Go, Portal Mini,
 second-generation Portal 10-inch and second-generation Portal+ firmware, and
-39 on the tested first-generation Portal+ firmware.
+194 are disabled on the original first-generation Portal. The tested
+first-generation Portal+ has a smaller installed package set and disables 39.
 Component-level targeting removes unused
 work without disabling the camera, audio, presence, media, app-management,
 identity, launcher, or WebView packages that the Portal and Kiosk Satellite
@@ -386,13 +387,17 @@ names across its address space. The component list is maintained in
 `tools/meta_debloat_components.py`.
 
 <details>
-<summary>Meta Portal Go, Portal Mini, Portal 10-inch (2nd generation) and Portal+ (2nd generation): 196 disabled components</summary>
+<summary>Meta Portal Go, original Portal 10-inch, Portal Mini, Portal 10-inch (2nd generation) and Portal+ (2nd generation): up to 196 disabled components</summary>
 <p></p>
 
 On Portal Go firmware `5051355900018050`, Portal Mini and Portal 10-inch
 firmware `3051355900018050`, and Portal+ firmware `4051355900018050`, the
 provisioner disables the same 196 components. The two intentionally retained
 MQTT components are excluded from this inventory.
+
+The original 10-inch Portal uses this inventory too. Its tested factory image
+contains 194 of the entries; the two CNS health-monitor components are absent,
+so the provisioner records them as absent instead of trying to disable them.
 
 **Background workers (143)**
 

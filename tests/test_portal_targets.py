@@ -13,7 +13,7 @@ from portal_targets import TARGETS, find_target  # noqa: E402
 
 class PortalTargetSelectionTest(unittest.TestCase):
     def test_every_supported_build_selects_only_its_exact_target(self) -> None:
-        self.assertEqual(len(TARGETS), 5)
+        self.assertEqual(len(TARGETS), 6)
         for target in TARGETS:
             selected = find_target(
                 target.device,
@@ -74,6 +74,8 @@ class PortalTargetSelectionTest(unittest.TestCase):
         )
         self.assertTrue(aloha.uid1000_embedded_helper)
         self.assertTrue(aloha.uid1000_installer_credentials)
+        self.assertTrue(aloha.meta_accounts_skip_force_stop)
+        self.assertFalse(aloha.meta_accounts_package_bootstrap)
 
         self.assertEqual(cipher.key, "portal-plus-cipher-4051355900018050")
         self.assertEqual(cipher.stack_route, "sendmmsg")
@@ -147,6 +149,65 @@ class PortalTargetSelectionTest(unittest.TestCase):
             "audio_deferred_ctl",
         ):
             self.assertEqual(getattr(mini, field), getattr(omni, field), field)
+
+    def test_original_portal_uses_a_distinct_model_guard_on_the_aloha_build(
+        self,
+    ) -> None:
+        targets = {target.key: target for target in TARGETS}
+        portal_plus = targets["portal-plus-aloha-1041515800015050"]
+        portal = targets["portal-10-aloha-1041515800015050"]
+        self.assertTrue(portal.meta_accounts_package_bootstrap)
+
+        self.assertIs(
+            find_target(portal.device, portal.fingerprint, "Portal"), portal
+        )
+        self.assertIs(
+            find_target(portal_plus.device, portal_plus.fingerprint, "Portal+"),
+            portal_plus,
+        )
+        self.assertIsNone(
+            find_target(portal.device, portal.fingerprint, "PortalMini")
+        )
+        for field in (
+            "device",
+            "fingerprint",
+            "kernel",
+            "preload_name",
+            "make_target",
+            "kaslr_pc_offsets",
+            "stack_route",
+            "memstart_strategy",
+            "bundled_simpleperf",
+            "route_delay_usec",
+            "proc_uid_sentinel",
+            "kgsl_reclaim",
+            "mm_recycle_slabs",
+            "reclaim_pairs",
+            "reclaim_sends",
+            "uid1000_host_package",
+            "uid1000_host_label",
+            "buffer_root_staged_sources",
+            "uid1000_data_directory",
+            "uid1000_helper_make_target",
+            "uid1000_helper_artifact",
+            "uid1000_hook_artifact",
+            "uid1000_embedded_helper",
+            "uid1000_installer_credentials",
+            "audio_java_fallback",
+            "audio_installer_credentials",
+            "device_owner_system_credentials",
+            "ota_installer_credentials",
+            "meta_accounts_system_credentials",
+            "meta_accounts_skip_force_stop",
+            "shell_root_package_actions",
+            "presence_installer_credentials",
+            "presence_runtime_keys",
+            "presence_full_sensor_width",
+            "ota_packages",
+        ):
+            self.assertEqual(
+                getattr(portal, field), getattr(portal_plus, field), field
+            )
 
     def test_portal_plus_model_guard_is_enforced(self) -> None:
         for target in TARGETS:

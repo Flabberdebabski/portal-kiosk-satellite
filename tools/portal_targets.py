@@ -47,6 +47,8 @@ class PortalTarget:
     device_owner_system_credentials: bool = False
     ota_installer_credentials: bool = False
     meta_accounts_system_credentials: bool = False
+    meta_accounts_skip_force_stop: bool = False
+    meta_accounts_package_bootstrap: bool = False
     shell_root_package_actions: bool = False
     presence_installer_credentials: bool = False
     presence_runtime_keys: tuple[str, ...] = ()
@@ -221,6 +223,55 @@ TARGETS = (
         device_owner_system_credentials=True,
         ota_installer_credentials=True,
         meta_accounts_system_credentials=True,
+        meta_accounts_skip_force_stop=True,
+        shell_root_package_actions=True,
+        presence_installer_credentials=True,
+        presence_runtime_keys=(
+            "enable_cv_background_detector_v2",
+            "enable_hardware_cropping",
+            "enable_liveness_metric",
+        ),
+        presence_full_sensor_width=4032.0,
+        ota_packages=("com.facebook.aloha.otaui",),
+    ),
+    PortalTarget(
+        key="portal-10-aloha-1041515800015050",
+        model="Meta Portal 10-inch (1st generation)",
+        device="aloha",
+        fingerprint=(
+            "Facebook/aloha_prod/aloha:9/PKQ1.191202.001/"
+            "1041515800015050:user/prod-keys"
+        ),
+        kernel="4.4.153+",
+        preload_name="preload-portal-aloha-1041515800015050.so",
+        make_target="portal-aloha-1041515800015050",
+        kaslr_pc_offsets=(0x3354,),
+        product_models=("Portal",),
+        stack_route="ptrace",
+        bundled_simpleperf=True,
+        route_delay_usec=0,
+        proc_uid_sentinel="app",
+        kgsl_reclaim=True,
+        mm_recycle_slabs=20,
+        reclaim_pairs=256,
+        reclaim_sends=256,
+        uid1000_host_package="com.facebook.alohasdk.virtualcameramanager",
+        uid1000_host_label="virtualcameramanager",
+        buffer_root_staged_sources=True,
+        uid1000_data_directory="/data/misc/adb/portal-uid1000",
+        uid1000_helper_make_target="aloha",
+        uid1000_helper_artifact="portal-camera-led-watch-aloha",
+        uid1000_hook_artifact="portal-uid1000-hook-aloha.bin",
+        uid1000_embedded_helper=True,
+        uid1000_installer_credentials=True,
+        audio_java_fallback=True,
+        audio_installer_credentials=True,
+        device_owner_system_credentials=True,
+        ota_installer_credentials=True,
+        meta_accounts_system_credentials=True,
+        meta_accounts_skip_force_stop=True,
+        meta_accounts_package_bootstrap=True,
+        exploit_timeout_seconds=180,
         shell_root_package_actions=True,
         presence_installer_credentials=True,
         presence_runtime_keys=(

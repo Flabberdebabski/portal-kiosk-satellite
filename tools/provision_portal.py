@@ -100,6 +100,7 @@ DEBLOAT_PACKAGES = (
 )
 
 META_ACCOUNT_BACKUP_REMOTE = "/data/local/tmp/portal-meta-accounts-before-v1.tsv"
+META_ACCOUNT_LOCAL_CLEAN_REMOTE = "/data/local/tmp/portal-meta-local-clean-v1"
 META_ACCOUNT_TYPES = (
     "com.facebook.aloha.sso",
     "com.facebook.aloha.pl",
@@ -216,6 +217,10 @@ class PortalProvisioner:
         backup_path: pathlib.Path | None = None,
         recover: bool = False,
         skip_build: bool = False,
+        wireless_adb_only: bool = False,
+        meta_accounts_local_only: bool = False,
+        meta_accounts_auth_only: bool = False,
+        meta_accounts_finalize_only: bool = False,
     ):
         self.serial = serial
         self.attempts = attempts
@@ -240,6 +245,7 @@ class PortalProvisioner:
         self.presence_already_configured = False
         self.restore_presence_profile = restore_presence_profile
         self.presence_fps_cap = presence_fps_cap
+        self.presence_fps_already_configured = False
         self.restore_presence_fps = restore_presence_fps
         self.privacy_dns = privacy_dns
         self.dhcp_dns = dhcp_dns
@@ -262,6 +268,10 @@ class PortalProvisioner:
         self.backup_path = backup_path
         self.recover = recover
         self.skip_build = skip_build
+        self.wireless_adb_only = wireless_adb_only
+        self.meta_accounts_local_only = meta_accounts_local_only
+        self.meta_accounts_auth_only = meta_accounts_auth_only
+        self.meta_accounts_finalize_only = meta_accounts_finalize_only
         self.adb = ["adb", "-s", serial]
         self.target: PortalTarget | None = None
         self.persist_wireless_adb = False
@@ -293,7 +303,7 @@ class PortalProvisioner:
     def needs_uid1000_payload(self) -> bool:
         return bool(
             self.disable_camera_light
-            or self.presence_fps_cap is not None
+            or self.presence_fps_action_requested()
             or (
                 self.persist_wireless_adb
                 and self.target
@@ -315,10 +325,16 @@ class PortalProvisioner:
             self.target
             and self.target.uid1000_embedded_helper
             and (
-                self.presence_fps_cap is not None
+                self.presence_fps_action_requested()
                 or self.restore_presence_fps
                 or self.restore_presence_profile
             )
+        )
+
+    def presence_fps_action_requested(self) -> bool:
+        return bool(
+            self.presence_fps_cap is not None
+            and not self.presence_fps_already_configured
         )
 
     def needs_component_ctl(self) -> bool:
@@ -327,7 +343,7 @@ class PortalProvisioner:
             or self.restore_bloat
             or (
                 (
-                    self.presence_fps_cap is not None
+                    self.presence_fps_action_requested()
                     or self.restore_presence_fps
                     or self.restore_presence_profile
                 )
@@ -732,8 +748,8 @@ class PortalProvisioner:
         logs = shell(
             "logcat",
             "-d",
-            "-t",
-            "10000",
+            "-b",
+            "main",
             "-v",
             "brief",
             "-e",
@@ -744,8 +760,8 @@ class PortalProvisioner:
         audio_logs = shell(
             "logcat",
             "-d",
-            "-t",
-            "10000",
+            "-b",
+            "main",
             "-s",
             "PortalAudioPersist:*",
             timeout=10,
@@ -965,7 +981,6 @@ class PortalProvisioner:
                     or (
                         target is not None
                         and target.audio_installer_credentials
-                        and "persistent audio watchdog started" in audio_logs
                         and "audio processing verified aec=0 ns=0" in audio_logs
                     )
                     else "restored"
@@ -975,7 +990,10 @@ class PortalProvisioner:
                     else "unknown"
                 ),
                 "installed_marker": audio_installed,
-                "watchdog_observed": "persistent audio watchdog started" in audio_logs,
+                "watchdog_observed": (
+                    "persistent audio watchdog started" in audio_logs
+                    or "audio processing verified aec=0 ns=0" in audio_logs
+                ),
                 "processing_zero_observed": (
                     "audio processing verified aec=0 ns=0" in audio_logs
                 ),
@@ -1202,6 +1220,7 @@ class PortalProvisioner:
     def privileged_requested(self) -> bool:
         return any(
             (
+                self.wireless_adb_only,
                 self.audio,
                 self.restore_audio,
                 self.device_owner,
@@ -1942,7 +1961,7 @@ class PortalProvisioner:
                 CAMERA_LIGHT_RESTORED_REMOTE,
             )
             print("CAMERA_LIGHT_RESTORE_MARKER_OK source=post-reboot")
-        if self.presence_fps_cap is not None:
+        if self.presence_fps_action_requested():
             self.adb_run(
                 [
                     "shell", "mkdir", "-p",
@@ -2392,6 +2411,40 @@ class PortalProvisioner:
         )
         return True
 
+    def presence_fps_preflight(self) -> bool:
+        if self.presence_fps_cap is None:
+            return False
+        marker = self.adb_run(
+            [
+                "shell", "cat",
+                "/data/local/tmp/portal-presence-backup/fps-cap-v1",
+            ],
+            timeout=5,
+        )
+        if (
+            marker.returncode != 0
+            or marker.stdout.strip() != str(self.presence_fps_cap)
+        ):
+            print(
+                "PRESENCE_FPS_PREFLIGHT action=install "
+                f"expected={self.presence_fps_cap} marker=absent-or-mismatched"
+            )
+            return False
+        try:
+            self.verify_presence_runtime(
+                require_profile=True,
+                expected_analysis_fps=self.presence_fps_cap,
+                wait_seconds=90,
+            )
+        except ProvisionError as exc:
+            print(f"PRESENCE_FPS_PREFLIGHT action=install reason={exc}")
+            return False
+        print(
+            "PRESENCE_FPS_PREFLIGHT action=skip "
+            f"fps={self.presence_fps_cap} activation=uid1000"
+        )
+        return True
+
     def kaslr_base(self, tag: str) -> int:
         if self.target is None:
             raise ProvisionError("target must be selected before KASLR discovery")
@@ -2432,11 +2485,11 @@ class PortalProvisioner:
             simpleperf = "/data/local/tmp/portal-simpleperf"
             self.adb_run(
                 ["push", str(local_simpleperf), simpleperf],
-                timeout=30,
+                timeout=120,
                 check=True,
             )
             self.adb_run(
-                ["shell", "chmod", "0755", simpleperf], timeout=5, check=True
+                ["shell", "chmod", "0755", simpleperf], timeout=20, check=True
             )
         for sample_try in range(3):
             remote = f"/data/local/tmp/portal-perf-{tag}-{sample_try}.data"
@@ -2447,10 +2500,15 @@ class PortalProvisioner:
                 "of=/dev/null bs=4096"
             )
             self.adb_run(["shell", command], timeout=20)
-            report = self.adb_run(
-                ["shell", simpleperf, "report-sample", "-i", remote],
-                timeout=30,
+            # report-sample can emit several megabytes for a two-second sample.
+            # Filter on-device so remote ADB targets only transfer the kernel
+            # addresses used by the KASLR calculation.
+            report_command = (
+                f"{shlex.quote(simpleperf)} report-sample -i "
+                f"{shlex.quote(remote)} | "
+                "grep -m 512 'vaddr_in_file: ffffff'"
             )
+            report = self.adb_run(["shell", report_command], timeout=60)
             self.adb_run(["shell", "rm", "-f", remote], timeout=5)
             values = [
                 int(value, 16)
@@ -2862,6 +2920,7 @@ class PortalProvisioner:
             self.target.meta_accounts_system_credentials
             and self.requested_actions() == {"remove_meta_accounts": True}
             and not self.meta_accounts_absent
+            and not self.meta_accounts_auth_only
         )
         private_presence_action = (
             self.target.presence_installer_credentials
@@ -2888,6 +2947,9 @@ class PortalProvisioner:
         preserve_shell_domain = (
             self.target.shell_root_package_actions
             and (
+                self.meta_accounts_auth_only
+                or self.meta_accounts_finalize_only
+                or
                 (
                     self.remove_meta_accounts
                     and not self.meta_accounts_already_clean
@@ -2908,16 +2970,21 @@ class PortalProvisioner:
             or private_uid1000_action
         )
         if credential_action:
-            source_process = (
-                "installd"
-                if (
-                    private_audio_action
-                    or private_ota_action
-                    or private_presence_action
-                    or private_uid1000_action
+            if private_meta_action and (
+                self.meta_accounts_local_only or self.meta_accounts_finalize_only
+            ):
+                source_process = "com.facebook.alohaservices.alohausers"
+            else:
+                source_process = (
+                    "installd"
+                    if (
+                        private_audio_action
+                        or private_ota_action
+                        or private_presence_action
+                        or private_uid1000_action
+                    )
+                    else "system_server"
                 )
-                else "system_server"
-            )
             process = self.adb_run(
                 ["shell", "pidof", source_process],
                 timeout=5,
@@ -2973,7 +3040,7 @@ class PortalProvisioner:
             environment["GHOSTLOCK_PRESENCE_PROFILE"] = "1"
         if self.restore_presence_profile:
             environment["GHOSTLOCK_RESTORE_PRESENCE_PROFILE"] = "1"
-        if self.presence_fps_cap is not None:
+        if self.presence_fps_action_requested():
             environment["GHOSTLOCK_PRESENCE_FPS_CAP"] = str(
                 self.presence_fps_cap
             )
@@ -3000,7 +3067,7 @@ class PortalProvisioner:
                     ),
                 }
             )
-        if self.presence_fps_cap is not None and not native_presence_prefs:
+        if self.presence_fps_action_requested() and not native_presence_prefs:
             environment["GHOSTLOCK_PRESENCE_PREF_ACTION"] = (
                 f"set:{self.presence_fps_cap}"
             )
@@ -3016,6 +3083,33 @@ class PortalProvisioner:
                     "GHOSTLOCK_META_ACCOUNT_CTL_JAR": ACCOUNT_CTL_REMOTE,
                 }
             )
+            if self.target.meta_accounts_skip_force_stop:
+                environment["GHOSTLOCK_META_ACCOUNTS_SKIP_FORCE_STOP"] = "1"
+            if self.meta_accounts_local_only:
+                environment["GHOSTLOCK_META_ACCOUNTS_LOCAL_ONLY"] = "1"
+            if self.meta_accounts_auth_only:
+                environment["GHOSTLOCK_META_ACCOUNTS_AUTH_ONLY"] = "1"
+            if self.meta_accounts_finalize_only:
+                environment["GHOSTLOCK_META_ACCOUNTS_FINALIZE_ONLY"] = "1"
+                package_uid_result = self.adb_run(
+                    [
+                        "shell", "cmd", "package", "list", "packages", "-U",
+                        "com.facebook.alohaservices.alohausers",
+                    ],
+                    timeout=10,
+                    check=True,
+                ).stdout
+                package_uid_match = re.search(r"\buid:(\d+)\b", package_uid_result)
+                if (
+                    package_uid_match is None
+                    or not 10000 <= int(package_uid_match.group(1)) < 100000
+                ):
+                    raise ProvisionError(
+                        "could not resolve the Meta account authenticator UID"
+                    )
+                environment["GHOSTLOCK_META_ACCOUNT_PACKAGE_UID"] = (
+                    package_uid_match.group(1)
+                )
         if self.shizuku:
             environment["GHOSTLOCK_SHIZUKU_AUTHORIZE_KEY"] = "1"
         if self.remove_shizuku:
@@ -3142,7 +3236,7 @@ class PortalProvisioner:
                 "presence profile restore",
                 True,
             )
-        if self.presence_fps_cap is not None:
+        if self.presence_fps_action_requested():
             presence_marker = (
                 "PORTAL_PRESENCE_FPS_NATIVE action=set "
                 f"fps={self.presence_fps_cap}"
@@ -3198,7 +3292,10 @@ class PortalProvisioner:
                 True,
             )
         if self.remove_meta_accounts and not self.meta_accounts_already_clean:
-            expected_markers["meta_accounts"] = ("Meta account removal", True)
+            expected_markers["meta_accounts"] = (
+                "PORTAL_META_ACCOUNTS_COMPLETE",
+                True,
+            )
         if self.shizuku:
             expected_markers["shizuku_key"] = (
                 "Shizuku ADB key authorize",
@@ -4576,7 +4673,33 @@ class PortalProvisioner:
         if self.restore_bloat:
             self.verify_debloat_restored()
         if self.remove_meta_accounts:
-            self.verify_meta_accounts_removed()
+            if self.meta_accounts_auth_only:
+                disabled = self.disabled_meta_authenticators()
+                missing = set(META_AUTHENTICATOR_COMPONENTS) - disabled
+                hardware_class = META_HARDWARE_AUTHENTICATOR.split("/", 1)[1]
+                if missing or hardware_class in disabled:
+                    raise ProvisionError(
+                        "Meta authenticator guard did not persist"
+                    )
+                print("META_AUTHENTICATOR_GUARD_OK authenticators=disabled")
+            elif self.meta_accounts_local_only:
+                self.adb_run(
+                    ["shell", "touch", META_ACCOUNT_LOCAL_CLEAN_REMOTE],
+                    timeout=5,
+                    check=True,
+                )
+                self.adb_run(
+                    ["shell", "chmod", "0600", META_ACCOUNT_LOCAL_CLEAN_REMOTE],
+                    timeout=5,
+                    check=True,
+                )
+                accounts = self.meta_accounts()
+                print(
+                    "META_ACCOUNT_PACKAGE_CLEANUP_OK local_rows=0 "
+                    f"system_records={len(accounts)}"
+                )
+            else:
+                self.verify_meta_accounts_removed()
         # Start a newly installed Shizuku helper before the longer camera
         # checks. Android keeps freshly installed packages stopped until their
         # first explicit launch, so its BOOT_COMPLETED receiver cannot run yet.
@@ -4864,6 +4987,44 @@ class PortalProvisioner:
                 "The provisioner waits up to 10 minutes for each reconnect.",
                 flush=True,
             )
+        if (
+            self.persist_wireless_adb
+            and self.target
+            and self.target.audio_installer_credentials
+            and not self.wireless_adb_only
+        ):
+            phase_logs = self.log_dir / "wireless-adb-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "WIRELESS_ADB_BOOTSTRAP_PHASE action=install "
+                "reason=credential-specific-followup-actions",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                skip_build=self.skip_build,
+                wireless_adb_only=True,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            persistent_port = self.adb_run(
+                ["shell", "getprop", persistent_property],
+                timeout=5,
+                check=True,
+            ).stdout.strip()
+            if persistent_port != "5555":
+                raise ProvisionError(
+                    "the dedicated wireless ADB bootstrap did not verify: "
+                    f"{persistent_property}={persistent_port!r}"
+                )
+            self.persist_wireless_adb = False
+            print(
+                "WIRELESS_ADB_BOOTSTRAP_OK persistent_port=5555 "
+                f"property={persistent_property}",
+                flush=True,
+            )
         self.audio_already_configured = (
             self.audio_preflight() if self.audio else False
         )
@@ -4983,6 +5144,88 @@ class PortalProvisioner:
             self.meta_accounts_preflight() if self.remove_meta_accounts else False
         )
         self.meta_accounts_already_clean = already_meta_clean
+        if (
+            self.remove_meta_accounts
+            and not already_meta_clean
+            and not self.meta_accounts_absent
+            and self.target
+            and self.target.meta_accounts_package_bootstrap
+            and not self.meta_accounts_local_only
+            and not self.meta_accounts_auth_only
+            and not self.meta_accounts_finalize_only
+        ):
+            disabled = self.disabled_meta_authenticators()
+            hardware_class = META_HARDWARE_AUTHENTICATOR.split("/", 1)[1]
+            if (
+                set(META_AUTHENTICATOR_COMPONENTS) - disabled
+                or hardware_class in disabled
+            ):
+                auth_logs = self.log_dir / "meta-accounts-auth-bootstrap"
+                auth_logs.mkdir(parents=True, exist_ok=True)
+                print(
+                    "META_ACCOUNTS_AUTH_PHASE action=guard "
+                    "reason=prevent-account-recreation",
+                    flush=True,
+                )
+                PortalProvisioner(
+                    self.serial,
+                    self.attempts,
+                    auth_logs,
+                    remove_meta_accounts=True,
+                    skip_build=self.skip_build,
+                    meta_accounts_auth_only=True,
+                ).provision()
+                self.connect(wait_seconds=30)
+                self.verify_target()
+            local_clean = (
+                self.adb_run(
+                    ["shell", "test", "-f", META_ACCOUNT_LOCAL_CLEAN_REMOTE],
+                    timeout=5,
+                ).returncode
+                == 0
+            )
+            if not local_clean:
+                phase_logs = self.log_dir / "meta-accounts-package-bootstrap"
+                phase_logs.mkdir(parents=True, exist_ok=True)
+                print(
+                    "META_ACCOUNTS_PACKAGE_PHASE action=remove "
+                    "reason=package-private-identity",
+                    flush=True,
+                )
+                PortalProvisioner(
+                    self.serial,
+                    self.attempts,
+                    phase_logs,
+                    remove_meta_accounts=True,
+                    skip_build=self.skip_build,
+                    meta_accounts_local_only=True,
+                ).provision()
+                self.connect(wait_seconds=30)
+                self.verify_target()
+            finalize_logs = self.log_dir / "meta-accounts-finalize-bootstrap"
+            finalize_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "META_ACCOUNTS_FINALIZE_PHASE action=remove "
+                "reason=system-account-records",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                finalize_logs,
+                remove_meta_accounts=True,
+                skip_build=self.skip_build,
+                meta_accounts_finalize_only=True,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            already_meta_clean = self.meta_accounts_preflight()
+            self.meta_accounts_already_clean = already_meta_clean
+            if not already_meta_clean:
+                raise ProvisionError(
+                    "the dedicated Meta account cleanup phases did not verify"
+                )
+            self.write_state("pending")
         if (
             self.remove_meta_accounts
             and not already_meta_clean
@@ -5112,6 +5355,50 @@ class PortalProvisioner:
                 f"logs={self.log_dir}"
             )
             return
+        self.presence_fps_already_configured = (
+            self.presence_fps_preflight()
+            if self.presence_fps_cap is not None
+            else False
+        )
+        dedicated_presence_fps_actions = (
+            {"presence_fps_cap": self.presence_fps_cap},
+            {
+                "optimize_presence": True,
+                "presence_fps_cap": self.presence_fps_cap,
+            },
+        )
+        if (
+            self.presence_fps_cap is not None
+            and not self.presence_fps_already_configured
+            and self.target
+            and self.target.uid1000_installer_credentials
+            and self.requested_actions() not in dedicated_presence_fps_actions
+        ):
+            phase_logs = self.log_dir / "presence-fps-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "PRESENCE_FPS_BOOTSTRAP_PHASE action=install "
+                "reason=installer-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                optimize_presence=True,
+                presence_fps_cap=self.presence_fps_cap,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            self.presence_fps_already_configured = (
+                self.presence_fps_preflight()
+            )
+            if not self.presence_fps_already_configured:
+                raise ProvisionError(
+                    "the dedicated Aloha presence FPS bootstrap did not verify"
+                )
+            self.write_state("pending")
         if self.debloat and not self.debloat_already_configured:
             self.apply_debloat()
         if self.restore_bloat:
@@ -5146,7 +5433,7 @@ class PortalProvisioner:
             or self.restore_bloat
             or (self.optimize_presence and not self.presence_already_configured)
             or self.restore_presence_profile
-            or self.presence_fps_cap is not None
+            or self.presence_fps_action_requested()
             or self.restore_presence_fps
             or (self.device_owner and not already_owner)
             or (self.remove_meta_accounts and not already_meta_clean)
@@ -5282,7 +5569,7 @@ class PortalProvisioner:
                     self.enable_ota_packages()
                 if self.remove_shizuku:
                     self.uninstall_shizuku_payload()
-                if self.presence_fps_cap is not None:
+                if self.presence_fps_action_requested():
                     self.uninstall_presence_helper()
                 if self.kiosk_home:
                     self.ensure_kiosk_home()

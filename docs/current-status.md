@@ -19,12 +19,14 @@ The current boot's randomized `_text` is recovered with Android's bundled
 `el0_svc_naked+0x34`; subtracting `0x3d7e` gives the runtime kernel base passed
 through `GHOSTLOCK_KASLR_BASE`.
 
-The first-generation Portal+ exact build is also supported by the host target
-registry. The tested device identifies as `aloha` with fingerprint
+The original 10-inch Portal and first-generation Portal+ exact builds are also
+supported by the host target registry. Both tested devices identify as
+`aloha` with fingerprint
 `Facebook/aloha_prod/aloha:9/PKQ1.191202.001/1041515800015050:user/prod-keys`
-and Linux `4.4.153+`. Its port uses the 4.4 ptrace stack layout, a KGSL-backed
-order-2 reclaim, bugreport-derived `memstart_addr`, and symbols extracted from
-the installed boot image.
+and Linux `4.4.153+`; the registry distinguishes them with exact `Portal` and
+`Portal+` product-model guards. Their port uses the 4.4 ptrace stack layout, a
+KGSL-backed order-2 reclaim, bugreport-derived `memstart_addr`, and symbols
+extracted from the installed boot image.
 
 The Android 10 target registry also contains tested ports for the
 second-generation Portal+ (`cipher`) build `4051355900018050`, plus the Portal
@@ -44,13 +46,24 @@ restores `ashmem_misc.fops`, clears the forged-table owner, and only then
 releases the UID-0/init-domain child to perform requested provisioning work.
 Failure paths mark the child aborted before releasing it.
 
-Wireless ADB persistence is verified on Aloha. The delegated child set
+Wireless ADB persistence is verified on both tested Aloha form factors. The
+delegated child set
 `persist.adb.tcp.port=5555` through Android's property service, and ADB returned
 without manual intervention after two distinct reboots. The post-reboot shell
 was UID 2000 in `u:r:shell:s0`, and SELinux remained enforcing. This validates
-the root transport and automatic wireless ADB on the exact Portal+ build. The
+the root transport and automatic wireless ADB on both exact Aloha targets. The
 complete Kiosk Satellite profile and optional features were subsequently
-verified on this model as well.
+verified on both models as well.
+
+On October 13, 2026, the original 10-inch Portal completed the kiosk profile
+and optional Shizuku, DHCP-DNS, and 2 FPS presence features. Its final status
+reported Kiosk Satellite as Device Owner and HOME, AEC/NS at zero, 194
+applicable cloud/background components disabled, no Meta accounts, OTA blocked,
+full-scene presence active through the UID-1000 boot hook, Shizuku running as
+`shell`, persistent wireless ADB, both cameras present, and SELinux enforcing.
+The final core verification boots were
+`983e1b5e-9f61-40f6-b5ed-9cad97afebaf` and
+`84411e09-b35f-43a4-816c-ec22bf683456`.
 
 Privileged provisioning is self-contained on a factory-reset device. Before
 the first clean reboot, the host installs the no-permission debuggable package
