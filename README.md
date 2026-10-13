@@ -71,6 +71,7 @@ The provisioner uses only the Python standard library.
 ### Portal
 
 - An exact model and firmware build listed under [Supported models](#supported-models)
+- The initial on-screen setup (OOBE) completed so developer access and ADB can be enabled
 - Developer access enabled and the host authorized over USB ADB
 - Wireless ADB enabled for the current boot with `adb -d tcpip 5555`
 - Stable network, a stable IP address and external power for several reboots
@@ -144,6 +145,10 @@ export D8="$BUILD_TOOLS/d8"
 ```
 
 ### 2. Prepare Kiosk Satellite and the Portal
+
+Complete the Portal's initial on-screen setup before continuing. Developer
+access and ADB are unavailable until the out-of-box experience (OOBE) has
+finished.
 
 Install Kiosk Satellite manually from its
 [GitHub repository](https://github.com/jxlarrea/kiosk-satellite) and open it
