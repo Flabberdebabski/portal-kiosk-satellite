@@ -42,6 +42,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertEqual(terry.reclaim_pairs, 64)
         self.assertEqual(terry.reclaim_sends, 64)
         self.assertEqual(terry.exploit_timeout_seconds, 300)
+        self.assertEqual(terry.post_root_timeout_seconds, 0)
         self.assertFalse(terry.recover_watch_result_after_disconnect)
         self.assertEqual(
             terry.uid1000_host_package,
@@ -55,6 +56,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertEqual(aloha.reclaim_pairs, 256)
         self.assertEqual(aloha.reclaim_sends, 256)
         self.assertEqual(aloha.exploit_timeout_seconds, 300)
+        self.assertEqual(aloha.post_root_timeout_seconds, 0)
         self.assertFalse(aloha.recover_watch_result_after_disconnect)
         self.assertEqual(
             aloha.uid1000_host_package,
@@ -83,6 +85,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertEqual(cipher.reclaim_pairs, 256)
         self.assertEqual(cipher.reclaim_sends, 256)
         self.assertEqual(cipher.exploit_timeout_seconds, 120)
+        self.assertEqual(cipher.post_root_timeout_seconds, 0)
         self.assertTrue(cipher.recover_watch_result_after_disconnect)
         self.assertEqual(
             cipher.uid1000_host_package,
@@ -95,6 +98,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertEqual(omni.reclaim_pairs, 256)
         self.assertEqual(omni.reclaim_sends, 256)
         self.assertEqual(omni.exploit_timeout_seconds, 120)
+        self.assertEqual(omni.post_root_timeout_seconds, 210)
         self.assertTrue(omni.recover_watch_result_after_disconnect)
         self.assertEqual(omni.address_discovery_settle_seconds, 15)
         self.assertTrue(omni.address_discovery_reboot_on_failure)
@@ -138,6 +142,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
             "reclaim_pairs",
             "reclaim_sends",
             "exploit_timeout_seconds",
+            "post_root_timeout_seconds",
             "recover_watch_result_after_disconnect",
             "address_discovery_settle_seconds",
             "address_discovery_reboot_on_failure",
@@ -257,6 +262,23 @@ class PortalTargetSelectionTest(unittest.TestCase):
             '#define UID1000_DATA_DIRECTORY "/data/misc/adb/portal-uid1000"',
             aloha_header,
         )
+
+    def test_account_ctl_descriptor_workaround_is_aloha_only(self) -> None:
+        headers = {
+            path.parent.name: path.read_text()
+            for path in (REPOSITORY / "exploit/targets").glob("*/target.h")
+        }
+        capability = "#define CONFIGFS_INHERIT_ACCOUNT_CTL 1"
+        self.assertIn(capability, headers["portal-aloha-1041515800015050"])
+        for target in (
+            "portal-cipher-4051355900018050",
+            "portal-omni-3051355900018050",
+            "portal-terry-5051355900018050",
+        ):
+            self.assertNotIn(capability, headers[target], target)
+
+        root_source = (REPOSITORY / "exploit/src/root.c").read_text()
+        self.assertIn("#ifdef CONFIGFS_INHERIT_ACCOUNT_CTL", root_source)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ Persistent features use focused configuration changes or small boot helpers.
 | [Temporary root provisioning](#how-the-root-exploit-works) | Opens a short privileged window for selected changes, then returns the Portal to normal enforcing mode. |
 | [Persistent wireless ADB](#enable-only-persistent-wireless-adb) | Keeps ADB available on port 5555 after setup, so future reboots no longer require USB activation. |
 | [Complete kiosk profile](#run-the-provisioner) | Applies the recommended Kiosk Satellite setup with one command. |
+| [Kiosk Satellite installation](#install-kiosk-satellite) | Downloads, verifies and installs the latest compatible Kiosk Satellite release when the app is missing. |
 | [Hardware audio processing control](#disable-hardware-echo-cancellation-and-noise-suppression) | Stops the Portal from suppressing microphone audio while its speaker is playing audio or music. |
 | [Kiosk Satellite permissions](#grant-kiosk-satellite-permissions) | Enables the microphone, camera, location, storage, presence sensor, overlays, system settings, usage access and reliable background operation. |
 | [Kiosk Satellite Device Owner](#make-kiosk-satellite-the-device-owner) | Gives Kiosk Satellite Android's strongest kiosk-management role. |
@@ -65,7 +66,7 @@ Persistent features use focused configuration changes or small boot helpers.
 - Android NDK r28.2 (`28.2.13676358`)
 - A JDK plus Android SDK Platform 36 and Build Tools containing `aapt`, `zipalign`, `apksigner` and `d8`
 - A USB data cable for initial stock-device setup
-- Internet access for the pinned Shizuku APK, unless using `--shizuku-apk PATH`
+- Internet access when Kiosk Satellite or the pinned Shizuku APK must be downloaded
 
 The provisioner uses only the Python standard library.
 
@@ -76,8 +77,6 @@ The provisioner uses only the Python standard library.
 - ADB enabled in the Portal's Debug menu and the host authorized over USB
 - Wireless ADB enabled for the current boot with `adb -d tcpip 5555`
 - Stable network, a stable IP address and external power for several reboots
-- [Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) installed and configured
-- Kiosk Satellite's device-admin receiver enabled before using `--device-owner`
 - The physical camera cover open and camera/microphone privacy control off for presence features and the `kiosk` profile
 
 Presence verification checks the live camera pipeline automatically. Nobody
@@ -145,17 +144,17 @@ export BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/37.0.0"
 export D8="$BUILD_TOOLS/d8"
 ```
 
-### 2. Prepare Kiosk Satellite and the Portal
+### 2. Prepare the Portal
 
 Complete the Portal's initial on-screen setup before continuing. The Debug
 menu and its ADB control are unavailable until the out-of-box experience
 (OOBE) has finished.
 
-Install Kiosk Satellite manually from its
-[GitHub repository](https://github.com/jxlarrea/kiosk-satellite) and open it
-once. Enable its device-admin receiver in the app if you plan to use Device
-Owner. Open the Portal's physical camera cover and turn off its
-camera/microphone privacy control.
+Open the Portal's physical camera cover and turn off its camera/microphone
+privacy control. The recommended profile installs
+[Kiosk Satellite](https://github.com/jxlarrea/kiosk-satellite) from its latest
+GitHub release when the app is missing, opens it once and activates its
+device-admin receiver. An existing installation and its data are retained.
 
 <a id="connect-to-the-portal"></a>
 ### 3. Connect to the Portal
@@ -199,10 +198,11 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
   --profile kiosk
 ```
 
-The `kiosk` profile configures audio, Kiosk Satellite's required permissions,
-Device Owner, Kiosk Satellite HOME, firmware blocking, debloat, Meta-account
-removal, presence optimization and third-party app updates. These core
-features do not need to be added as individual flags.
+The `kiosk` profile installs Kiosk Satellite when needed, then configures its
+required permissions, Device Owner and HOME role. It also configures audio,
+firmware blocking, debloat, Meta-account removal, presence optimization and
+third-party app updates. These core features do not need to be added as
+individual flags.
 
 Add only the extra features you want:
 
@@ -239,6 +239,31 @@ installed automatically whenever another privileged provisioning action runs.
 On a stock Portal, continue manually enabling ADB in the Debug menu and running
 `adb -d tcpip 5555` after each provisioning reboot until the command prints
 `WIRELESS_ADB_OK`. Later reboots no longer require the USB host.
+
+</details>
+<p></p>
+
+<a id="install-kiosk-satellite"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Install Kiosk Satellite</summary>
+<p></p>
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --install-kiosk-satellite
+```
+
+When Kiosk Satellite is missing, the provisioner reads the latest release from
+the official [Kiosk Satellite repository](https://github.com/jxlarrea/kiosk-satellite),
+selects the APK for the Portal's CPU architecture, verifies the file against
+the SHA-256 digest published by GitHub, installs it and opens it once. It does
+not replace or update an existing installation, so its app data is preserved.
+This standalone action uses ordinary ADB authority and does not reboot or run
+the root exploit.
+
+In the complete `--profile kiosk` flow, installation happens before the
+provisioner activates `KioskAdminReceiver`, assigns Device Owner and grants
+permissions.
 
 </details>
 <p></p>
@@ -318,8 +343,10 @@ python3 tools/provision_portal.py \
 
 This gives Kiosk Satellite Android's Device Owner role for user 0. Device Owner
 allows the kiosk to apply stronger device policies than an ordinary device
-admin. Kiosk Satellite must already be installed and its
-`KioskAdminReceiver` must already be active.
+admin. The complete `--profile kiosk` installs the app when needed and
+activates `KioskAdminReceiver` before this step. For a selective setup, run
+`--install-kiosk-satellite` first or install the app yourself; the Device Owner
+preflight activates the receiver.
 
 Meta accounts normally cause Android's `dpm set-device-owner` command to reject
 the operation. The privileged installer writes the Android 10 owner record
