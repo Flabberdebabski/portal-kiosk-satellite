@@ -47,6 +47,27 @@ class PersistentWirelessAdbCliTest(unittest.TestCase):
 
 
 class RemoteWipeCliTest(unittest.TestCase):
+    def test_completed_component_profiles_are_not_reapplied(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                debloat=True,
+                block_remote_wipe=True,
+            )
+            provisioner.debloat_already_configured = True
+            provisioner.remote_wipe_already_configured = True
+
+            self.assertFalse(provisioner.needs_component_ctl())
+
+            provisioner.remote_wipe_already_configured = False
+            self.assertTrue(provisioner.needs_component_ctl())
+
+            provisioner.remote_wipe_already_configured = True
+            provisioner.debloat_already_configured = False
+            self.assertTrue(provisioner.needs_component_ctl())
+
     def test_standalone_block_targets_only_the_two_receivers(self) -> None:
         with mock.patch.object(
             sys,

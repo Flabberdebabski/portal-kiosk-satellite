@@ -382,7 +382,7 @@ class PortalProvisioner:
 
     def needs_component_ctl(self) -> bool:
         return bool(
-            self.debloat
+            (self.debloat and not self.debloat_already_configured)
             or self.restore_bloat
             or (self.block_remote_wipe and not self.remote_wipe_already_configured)
             or self.restore_remote_wipe
