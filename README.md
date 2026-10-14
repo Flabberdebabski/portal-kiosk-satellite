@@ -1027,12 +1027,13 @@ python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --shizuku
 ```
 
-This downloads the pinned official Shizuku release, verifies its SHA-256
-digest, and installs it with a small Portal boot helper. Meta's required APK
-certificate verifier accepts only Meta-approved signing certificates, so the
-provisioner temporarily disables the verifier package around the two local
-installs, restores the package's original enabled state, waits for Package
-Manager to save it, and checks the result after reboot. The separate
+This downloads the pinned official Shizuku release on the host computer,
+verifies its SHA-256 digest, and installs it with a small Portal boot helper.
+The Portal itself does not need internet access for this step. Meta's required
+APK certificate verifier accepts only Meta-approved signing certificates, so
+the provisioner temporarily disables the verifier package around the two
+local installs, restores the package's original enabled state, waits for
+Package Manager to save it, and checks the result after reboot. The separate
 `--allow-app-updates` action controls whether later third-party updates are
 accepted.
 

@@ -22,6 +22,12 @@ import time
 import urllib.request
 import zipfile
 
+if sys.version_info < (3, 9):
+    raise SystemExit(
+        "PROVISION_ERROR: Python 3.9 or newer is required; "
+        f"running {sys.version_info.major}.{sys.version_info.minor}"
+    )
+
 from meta_debloat_components import DEBLOAT_COMPONENTS, DEBLOAT_COMPONENT_NAMES
 from portal_targets import PortalTarget, find_target
 
@@ -396,6 +402,16 @@ class PortalProvisioner:
             )
         )
 
+    def only_component_actions_requested(self) -> bool:
+        """Return whether one exploit pass can handle every selected action."""
+        actions = set(self.requested_actions())
+        return bool(actions) and actions <= {
+            "debloat",
+            "restore_bloat",
+            "block_remote_wipe",
+            "restore_remote_wipe",
+        }
+
     @staticmethod
     def run(
         args: list[str], timeout: float | None = None, check: bool = False
@@ -476,7 +492,11 @@ class PortalProvisioner:
                 boot = self.adb_run(
                     ["shell", "cat", "/proc/sys/kernel/random/boot_id"], timeout=5
                 )
-                last_boot_id = boot.stdout.strip()
+                observed_boot_id = boot.stdout.strip()
+                if boot.returncode == 0 and re.fullmatch(
+                    r"[0-9a-fA-F-]{36}", observed_boot_id
+                ):
+                    last_boot_id = observed_boot_id
                 if (
                     state.returncode == 0
                     and completed.stdout.strip() == "1"
@@ -487,9 +507,16 @@ class PortalProvisioner:
             except ProvisionError:
                 pass
             time.sleep(3)
+        adb_hint = ""
+        if not last_boot_id:
+            adb_hint = (
+                "; ADB did not return. If WIRELESS_ADB_OK has not appeared yet, "
+                "enable ADB in the Portal Debug menu and run "
+                "`adb -d tcpip 5555`, then rerun the same provisioner command"
+            )
         raise ProvisionError(
             f"{self.serial} did not complete a new boot after {before}; "
-            f"last boot ID was {last_boot_id!r}"
+            f"last valid boot ID was {last_boot_id!r}{adb_hint}"
         )
 
     def verify_target(self, require_supported: bool = True) -> PortalTarget | None:
@@ -2212,7 +2239,11 @@ class PortalProvisioner:
                     urllib.request.urlretrieve(SHIZUKU_APK_URL, temporary)
                 except OSError as exc:
                     temporary.unlink(missing_ok=True)
-                    raise ProvisionError(f"Shizuku download failed: {exc}") from exc
+                    raise ProvisionError(
+                        "Shizuku APK download failed on the host computer: "
+                        f"{exc}. Connect the host to the internet or download "
+                        "the pinned APK separately and pass --shizuku-apk PATH"
+                    ) from exc
                 digest = hashlib.sha256(temporary.read_bytes()).hexdigest()
                 if digest != SHIZUKU_APK_SHA256:
                     temporary.unlink(missing_ok=True)
@@ -2979,11 +3010,11 @@ class PortalProvisioner:
         offsets = self.target.kaslr_pc_offsets
         simpleperf = "simpleperf"
         if self.target.bundled_simpleperf:
-            roots = [
-                pathlib.Path(value)
-                for name in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK")
-                if (value := os.environ.get(name))
-            ]
+            roots = []
+            for name in ("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT", "NDK"):
+                value = os.environ.get(name)
+                if value:
+                    roots.append(pathlib.Path(value))
             roots.extend(
                 (
                     pathlib.Path.home() / "android-sdk/ndk",
@@ -4370,11 +4401,15 @@ class PortalProvisioner:
             timeout=10,
             check=True,
         )
-        return any(
-            fields[0] == "system" and "portal-camera-led-watch" in line
-            for line in result.stdout.splitlines()
-            if (fields := line.split(maxsplit=2))
-        )
+        for line in result.stdout.splitlines():
+            fields = line.split(maxsplit=2)
+            if (
+                fields
+                and fields[0] == "system"
+                and "portal-camera-led-watch" in line
+            ):
+                return True
+        return False
 
     def prepare_camera_light_install(self) -> None:
         if self.target is None:
@@ -5634,6 +5669,11 @@ class PortalProvisioner:
                 self.create_backup_bundle(self.backup_path)
             return
         self.verify_target()
+        # Resolve host-side downloads before any exploit bootstrap can reboot the
+        # Portal. This turns a missing host network connection into an immediate,
+        # actionable error instead of a late failure after several phases.
+        if self.shizuku:
+            self.resolve_shizuku_apk()
         if self.disable_camera_light:
             raise ProvisionError(
                 "--disable-camera-light has been retired because Meta's "
@@ -6000,7 +6040,7 @@ class PortalProvisioner:
             and not self.debloat_already_configured
             and self.target
             and self.target.shell_root_package_actions
-            and self.requested_actions() != {"debloat": True}
+            and not self.only_component_actions_requested()
         ):
             phase_logs = self.log_dir / "debloat-bootstrap"
             phase_logs.mkdir(parents=True, exist_ok=True)
@@ -6045,8 +6085,7 @@ class PortalProvisioner:
             and not self.remote_wipe_already_configured
             and self.target
             and self.target.shell_root_package_actions
-            and not set(self.requested_actions())
-            <= {"debloat", "restore_bloat", "block_remote_wipe", "restore_remote_wipe"}
+            and not self.only_component_actions_requested()
         ):
             phase_logs = self.log_dir / "remote-wipe-bootstrap"
             phase_logs.mkdir(parents=True, exist_ok=True)

@@ -46,7 +46,49 @@ class PersistentWirelessAdbCliTest(unittest.TestCase):
             self.assertTrue(provisioner.privileged_requested())
 
 
+class ShizukuCliTest(unittest.TestCase):
+    def test_download_failure_is_reported_before_any_reboot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                shizuku=True,
+            )
+            with (
+                mock.patch.object(provisioner, "connect"),
+                mock.patch.object(provisioner, "verify_target"),
+                mock.patch.object(
+                    provisioner,
+                    "resolve_shizuku_apk",
+                    side_effect=ProvisionError(
+                        "Shizuku APK download failed on the host computer"
+                    ),
+                ),
+                mock.patch.object(provisioner, "reboot") as reboot,
+            ):
+                with self.assertRaisesRegex(ProvisionError, "host computer"):
+                    provisioner.provision()
+
+            reboot.assert_not_called()
+
+
 class RemoteWipeCliTest(unittest.TestCase):
+    def test_combined_component_actions_are_a_single_bootstrap_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                debloat=True,
+                block_remote_wipe=True,
+            )
+
+            self.assertTrue(provisioner.only_component_actions_requested())
+
+            provisioner.audio = True
+            self.assertFalse(provisioner.only_component_actions_requested())
+
     def test_completed_component_profiles_are_not_reapplied(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             provisioner = PortalProvisioner(
