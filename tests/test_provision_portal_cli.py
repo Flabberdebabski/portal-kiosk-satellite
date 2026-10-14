@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from provision_portal import (  # noqa: E402
     KIOSK_RELEASE_DOWNLOAD_PREFIX,
+    REMOTE_WIPE_COMPONENTS,
     PortalProvisioner,
     ProvisionError,
     parse_args,
@@ -43,6 +44,108 @@ class PersistentWirelessAdbCliTest(unittest.TestCase):
                 {"persistent_wireless_adb": True},
             )
             self.assertTrue(provisioner.privileged_requested())
+
+
+class RemoteWipeCliTest(unittest.TestCase):
+    def test_standalone_block_targets_only_the_two_receivers(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["provision_portal.py", "--block-remote-wipe"],
+        ):
+            arguments = parse_args()
+
+        self.assertTrue(arguments.block_remote_wipe)
+        self.assertFalse(arguments.audio)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                block_remote_wipe=True,
+            )
+            captured: list[str] = []
+            states = {component: "default" for component in REMOTE_WIPE_COMPONENTS}
+            with (
+                mock.patch.object(
+                    provisioner,
+                    "ensure_remote_wipe_backup",
+                    return_value=states,
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "push_text_atomic",
+                    side_effect=lambda contents, remote: captured.append(contents),
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "adb_run",
+                    return_value=subprocess.CompletedProcess([], 0, ""),
+                ),
+            ):
+                provisioner.prepare_component_actions()
+
+        self.assertEqual(
+            provisioner.requested_actions(), {"block_remote_wipe": True}
+        )
+        self.assertTrue(provisioner.privileged_requested())
+        self.assertEqual(len(captured), 1)
+        action_lines = captured[0].splitlines()[1:]
+        self.assertEqual(
+            action_lines,
+            [f"disable\t{component}" for component in REMOTE_WIPE_COMPONENTS],
+        )
+
+    def test_kiosk_profile_includes_remote_wipe_block(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["provision_portal.py", "--profile", "kiosk"],
+        ):
+            arguments = parse_args()
+
+        self.assertTrue(arguments.block_remote_wipe)
+
+    def test_restore_preserves_each_saved_component_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                restore_remote_wipe=True,
+            )
+            states = {
+                REMOTE_WIPE_COMPONENTS[0]: "default",
+                REMOTE_WIPE_COMPONENTS[1]: "enabled",
+            }
+            captured: list[str] = []
+            with (
+                mock.patch.object(
+                    provisioner,
+                    "read_remote_wipe_backup",
+                    return_value=states,
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "push_text_atomic",
+                    side_effect=lambda contents, remote: captured.append(contents),
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "adb_run",
+                    return_value=subprocess.CompletedProcess([], 0, ""),
+                ),
+            ):
+                provisioner.prepare_component_actions()
+
+        self.assertEqual(
+            captured[0].splitlines()[1:],
+            [
+                f"default\t{REMOTE_WIPE_COMPONENTS[0]}",
+                f"enable\t{REMOTE_WIPE_COMPONENTS[1]}",
+            ],
+        )
 
 
 class KioskPermissionsCliTest(unittest.TestCase):

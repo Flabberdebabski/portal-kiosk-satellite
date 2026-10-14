@@ -111,6 +111,15 @@ DEBLOAT_COMPONENT_BACKUP_REMOTE = (
 DEBLOAT_COMPONENT_ACTIONS_REMOTE = (
     "/data/local/tmp/portal-debloat-components-actions-v1.tsv"
 )
+REMOTE_WIPE_BACKUP_REMOTE = (
+    "/data/local/tmp/portal-remote-wipe-components-backup-v1.tsv"
+)
+REMOTE_WIPE_COMPONENTS = (
+    "com.facebook.alohaservices.deviceadmin/"
+    "com.facebook.aloha.system.deviceadmin.remotewipe.FactoryResetReceiver",
+    "com.facebook.alohaservices.deviceadmin/"
+    "com.facebook.aloha.system.deviceadmin.remotewipe.RemoteWipeReceiver",
+)
 PACKAGE_STATE_SETTLE_SECONDS = 15
 DEBLOAT_PACKAGES = (
     "com.facebook.aloha.analytics",
@@ -221,6 +230,8 @@ class PortalProvisioner:
         enable_updates: bool = False,
         debloat: bool = False,
         restore_bloat: bool = False,
+        block_remote_wipe: bool = False,
+        restore_remote_wipe: bool = False,
         remove_meta_accounts: bool = False,
         optimize_presence: bool = False,
         restore_presence_profile: bool = False,
@@ -266,6 +277,9 @@ class PortalProvisioner:
         self.debloat = debloat
         self.debloat_already_configured = False
         self.restore_bloat = restore_bloat
+        self.block_remote_wipe = block_remote_wipe
+        self.remote_wipe_already_configured = False
+        self.restore_remote_wipe = restore_remote_wipe
         self.remove_meta_accounts = remove_meta_accounts
         self.meta_accounts_absent = False
         self.meta_accounts_already_clean = False
@@ -370,6 +384,8 @@ class PortalProvisioner:
         return bool(
             self.debloat
             or self.restore_bloat
+            or (self.block_remote_wipe and not self.remote_wipe_already_configured)
+            or self.restore_remote_wipe
             or (
                 (
                     self.presence_fps_action_requested()
@@ -581,6 +597,8 @@ class PortalProvisioner:
             "enable_updates",
             "debloat",
             "restore_bloat",
+            "block_remote_wipe",
+            "restore_remote_wipe",
             "remove_meta_accounts",
             "optimize_presence",
             "restore_presence_profile",
@@ -634,6 +652,8 @@ class PortalProvisioner:
             candidates.append(self.kiosk_apk)
         if self.remove_meta_accounts:
             candidates.append(ACCOUNT_CTL_LOCAL)
+        if self.needs_component_ctl() or self.block_remote_wipe:
+            candidates.append(COMPONENT_CTL_LOCAL)
         if self.shizuku:
             candidates.append(SHIZUKU_HELPER_LOCAL)
             if self.shizuku_apk:
@@ -921,6 +941,16 @@ class PortalProvisioner:
             if state == "disabled"
             and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
         )
+        remote_wipe_backup = self.read_remote_wipe_backup(required=False)
+        remote_wipe_states = self.current_named_component_states(
+            REMOTE_WIPE_COMPONENTS, detect_missing=True
+        )
+        remote_wipe_present = sum(
+            state != "absent" for state in remote_wipe_states.values()
+        )
+        remote_wipe_disabled = sum(
+            state == "disabled" for state in remote_wipe_states.values()
+        )
         presence_helper_dump = shell("dumpsys", "package", PRESENCE_HELPER_PACKAGE)
         presence_uid1000_configured = exists(self.uid1000_path("presence-fps"))
         presence_uid1000_fps = shell(
@@ -1094,6 +1124,25 @@ class PortalProvisioner:
                     or component_states[component][1] == "disabled"
                     for component, (_, original) in component_backup.items()
                 ),
+            },
+            "remote_wipe": {
+                "state": (
+                    "blocked"
+                    if remote_wipe_present == remote_wipe_disabled
+                    else "restored"
+                    if remote_wipe_backup is not None
+                    and all(
+                        original == "absent"
+                        or remote_wipe_states[component] == original
+                        for component, original in remote_wipe_backup.items()
+                    )
+                    else "enabled"
+                ),
+                "backup_present": remote_wipe_backup is not None,
+                "receivers_targeted": len(REMOTE_WIPE_COMPONENTS),
+                "receivers_present": remote_wipe_present,
+                "receivers_disabled": remote_wipe_disabled,
+                "components": remote_wipe_states,
             },
             "meta_accounts": {
                 "remaining": len(accounts),
@@ -1269,6 +1318,8 @@ class PortalProvisioner:
                 self.enable_updates,
                 self.debloat,
                 self.restore_bloat,
+                self.block_remote_wipe,
+                self.restore_remote_wipe,
                 self.remove_meta_accounts,
                 self.optimize_presence,
                 self.restore_presence_profile,
@@ -1290,6 +1341,7 @@ class PortalProvisioner:
         audio = status.get("audio", {})
         updates = status.get("updates", {})
         debloat = status.get("debloat", {})
+        remote_wipe = status.get("remote_wipe", {})
         accounts = status.get("meta_accounts", {})
         presence = status.get("presence", {})
         privacy = status.get("privacy_dns", {})
@@ -1312,6 +1364,11 @@ class PortalProvisioner:
             ),
             "updates": updates.get("state") if isinstance(updates, dict) else None,
             "debloat": debloat.get("complete") if isinstance(debloat, dict) else None,
+            "remote_wipe": (
+                remote_wipe.get("state")
+                if isinstance(remote_wipe, dict)
+                else None
+            ),
             "meta_accounts_remaining": (
                 accounts.get("remaining") if isinstance(accounts, dict) else None
             ),
@@ -1399,6 +1456,7 @@ class PortalProvisioner:
                 STATE_REMOTE,
                 DEBLOAT_BACKUP_REMOTE,
                 DEBLOAT_COMPONENT_BACKUP_REMOTE,
+                REMOTE_WIPE_BACKUP_REMOTE,
                 META_ACCOUNT_BACKUP_REMOTE,
                 PRIVACY_BACKUP_REMOTE,
                 APP_VERIFIER_BACKUP_REMOTE,
@@ -2627,6 +2685,8 @@ class PortalProvisioner:
             "enable_updates",
             "debloat",
             "restore_bloat",
+            "block_remote_wipe",
+            "restore_remote_wipe",
             "remove_meta_accounts",
             "optimize_presence",
             "restore_presence_profile",
@@ -2841,6 +2901,23 @@ class PortalProvisioner:
             "DEBLOAT_PREFLIGHT "
             f"packages_complete={int(packages_complete)} "
             f"components_complete={int(components_complete)} "
+            f"action={'skip' if complete else 'install'}"
+        )
+        return complete
+
+    def remote_wipe_preflight(self) -> bool:
+        saved = self.read_remote_wipe_backup(required=False)
+        current = self.current_named_component_states(
+            REMOTE_WIPE_COMPONENTS, detect_missing=True
+        )
+        complete = saved is not None and all(
+            state in {"disabled", "absent"} for state in current.values()
+        )
+        print(
+            "REMOTE_WIPE_PREFLIGHT "
+            f"backup_present={int(saved is not None)} "
+            f"receivers_disabled={sum(state == 'disabled' for state in current.values())} "
+            f"receivers_absent={sum(state == 'absent' for state in current.values())} "
             f"action={'skip' if complete else 'install'}"
         )
         return complete
@@ -3408,8 +3485,23 @@ class PortalProvisioner:
                     and self.requested_actions()
                     == {"remove_meta_accounts": True}
                 )
-                or self.requested_actions()
-                in ({"debloat": True}, {"restore_bloat": True})
+                or (
+                    set(self.requested_actions())
+                    <= {
+                        "debloat",
+                        "restore_bloat",
+                        "block_remote_wipe",
+                        "restore_remote_wipe",
+                    }
+                    and any(
+                        (
+                            self.debloat,
+                            self.restore_bloat,
+                            self.block_remote_wipe,
+                            self.restore_remote_wipe,
+                        )
+                    )
+                )
             )
         )
         credential_action = (
@@ -4511,33 +4603,47 @@ class PortalProvisioner:
             return set()
         return {line.strip() for line in match.group(1).splitlines() if line.strip()}
 
-    def current_component_states(self) -> dict[str, tuple[str, str]]:
+    def current_named_component_states(
+        self, components: tuple[str, ...], detect_missing: bool = False
+    ) -> dict[str, str]:
         installed, _ = self.package_sets()
-        by_package: dict[str, list[tuple[str, str]]] = collections.defaultdict(list)
-        for category, component in DEBLOAT_COMPONENTS:
+        by_package: dict[str, list[str]] = collections.defaultdict(list)
+        for component in components:
             package, class_name = component.split("/", 1)
-            by_package[package].append((category, class_name))
-        states: dict[str, tuple[str, str]] = {}
+            by_package[package].append(class_name)
+        states: dict[str, str] = {}
         for package, entries in by_package.items():
             if package not in installed:
-                for category, class_name in entries:
-                    states[f"{package}/{class_name}"] = (category, "absent")
+                for class_name in entries:
+                    states[f"{package}/{class_name}"] = "absent"
                 continue
             dump = self.adb_run(
                 ["shell", "dumpsys", "package", package], timeout=20, check=True
             ).stdout
             enabled = self.component_override_set(dump, "enabledComponents")
             disabled = self.component_override_set(dump, "disabledComponents")
-            for category, class_name in entries:
+            for class_name in entries:
                 state = (
                     "enabled"
                     if class_name in enabled
                     else "disabled"
                     if class_name in disabled
+                    else "absent"
+                    if detect_missing and class_name not in dump
                     else "default"
                 )
-                states[f"{package}/{class_name}"] = (category, state)
+                states[f"{package}/{class_name}"] = state
         return states
+
+    def current_component_states(self) -> dict[str, tuple[str, str]]:
+        categories = {
+            component: category for category, component in DEBLOAT_COMPONENTS
+        }
+        states = self.current_named_component_states(DEBLOAT_COMPONENT_NAMES)
+        return {
+            component: (categories[component], state)
+            for component, state in states.items()
+        }
 
     def ensure_component_backup(self) -> dict[str, tuple[str, str]]:
         existing = self.read_component_backup(required=False)
@@ -4562,6 +4668,74 @@ class PortalProvisioner:
         )
         return states
 
+    @staticmethod
+    def parse_remote_wipe_backup(contents: str) -> dict[str, str]:
+        lines = contents.splitlines()
+        if not lines or lines[0] != "# portal-remote-wipe-components-backup-v1":
+            raise ProvisionError("unrecognized remote-wipe backup format")
+        states: dict[str, str] = {}
+        for line in lines[1:]:
+            if not line:
+                continue
+            fields = line.split("\t")
+            if len(fields) != 2:
+                raise ProvisionError(f"invalid remote-wipe backup line: {line!r}")
+            component, state = fields
+            if component in states or component not in REMOTE_WIPE_COMPONENTS:
+                raise ProvisionError(
+                    f"unexpected component in remote-wipe backup: {component!r}"
+                )
+            if state not in {"default", "enabled", "disabled", "absent"}:
+                raise ProvisionError(
+                    f"invalid state in remote-wipe backup: {state!r}"
+                )
+            states[component] = state
+        missing = set(REMOTE_WIPE_COMPONENTS) - states.keys()
+        if missing:
+            raise ProvisionError(
+                "remote-wipe backup is incomplete: " + ", ".join(sorted(missing))
+            )
+        return states
+
+    def read_remote_wipe_backup(
+        self, required: bool = True
+    ) -> dict[str, str] | None:
+        result = self.adb_run(
+            ["shell", "cat", REMOTE_WIPE_BACKUP_REMOTE], timeout=5
+        )
+        if result.returncode != 0:
+            if required:
+                raise ProvisionError(
+                    f"remote-wipe backup is absent: {REMOTE_WIPE_BACKUP_REMOTE}"
+                )
+            return None
+        return self.parse_remote_wipe_backup(result.stdout)
+
+    def ensure_remote_wipe_backup(self) -> dict[str, str]:
+        existing = self.read_remote_wipe_backup(required=False)
+        if existing is not None:
+            print(
+                "REMOTE_WIPE_BACKUP_OK existing=1 path="
+                + REMOTE_WIPE_BACKUP_REMOTE
+            )
+            return existing
+        states = self.current_named_component_states(
+            REMOTE_WIPE_COMPONENTS, detect_missing=True
+        )
+        contents = "# portal-remote-wipe-components-backup-v1\n" + "".join(
+            f"{component}\t{states[component]}\n"
+            for component in REMOTE_WIPE_COMPONENTS
+        )
+        self.push_text_atomic(contents, REMOTE_WIPE_BACKUP_REMOTE)
+        saved = self.read_remote_wipe_backup(required=True)
+        if saved != states:
+            raise ProvisionError("remote-wipe backup verification failed")
+        print(
+            "REMOTE_WIPE_BACKUP_OK existing=0 path="
+            + REMOTE_WIPE_BACKUP_REMOTE
+        )
+        return states
+
     def push_text_atomic(self, contents: str, remote: str) -> None:
         remote_tmp = remote + ".tmp"
         with tempfile.TemporaryDirectory(prefix="portal-state-") as temporary:
@@ -4575,41 +4749,69 @@ class PortalProvisioner:
         )
         self.adb_run(["shell", command], timeout=10, check=True)
 
-    def prepare_component_actions(self, restore: bool) -> None:
-        states = self.read_component_backup(required=False)
-        if states is None:
-            if not restore:
-                states = self.ensure_component_backup()
-            else:
-                print("DEBLOAT_COMPONENT_RESTORE legacy_backup=absent actions=0")
-                self.push_text_atomic(
-                    "# portal-debloat-component-actions-v1\n",
-                    DEBLOAT_COMPONENT_ACTIONS_REMOTE,
+    @staticmethod
+    def restore_component_action(state: str) -> str:
+        return (
+            "default"
+            if state == "default"
+            else "enable"
+            if state == "enabled"
+            else "disable"
+        )
+
+    def prepare_component_actions(self) -> None:
+        actions: list[str] = []
+        modes: list[str] = []
+        if self.debloat or self.restore_bloat:
+            states = self.read_component_backup(required=False)
+            if states is None:
+                if self.debloat:
+                    states = self.ensure_component_backup()
+                else:
+                    print("DEBLOAT_COMPONENT_RESTORE legacy_backup=absent actions=0")
+            if states is not None:
+                for component in DEBLOAT_COMPONENT_NAMES:
+                    _, state = states[component]
+                    if state == "absent":
+                        continue
+                    if self.debloat and component in SELF_MANAGED_DEBLOAT_COMPONENTS:
+                        continue
+                    action = (
+                        "disable"
+                        if self.debloat
+                        else self.restore_component_action(state)
+                    )
+                    actions.append(f"{action}\t{component}\n")
+                modes.append("debloat-disable" if self.debloat else "debloat-restore")
+                if self.debloat:
+                    account_backup = self.adb_run(
+                        ["shell", "test", "-f", META_ACCOUNT_BACKUP_REMOTE],
+                        timeout=5,
+                    )
+                    if account_backup.returncode == 0:
+                        actions.append(f"enable\t{META_HARDWARE_AUTHENTICATOR}\n")
+        if self.block_remote_wipe or self.restore_remote_wipe:
+            remote_states = (
+                self.ensure_remote_wipe_backup()
+                if self.block_remote_wipe
+                else self.read_remote_wipe_backup(required=True)
+            )
+            assert remote_states is not None
+            for component in REMOTE_WIPE_COMPONENTS:
+                state = remote_states[component]
+                if state == "absent":
+                    continue
+                action = (
+                    "disable"
+                    if self.block_remote_wipe
+                    else self.restore_component_action(state)
                 )
-                return
-        actions = []
-        for component in DEBLOAT_COMPONENT_NAMES:
-            _, state = states[component]
-            if state == "absent":
-                continue
-            if not restore and component in SELF_MANAGED_DEBLOAT_COMPONENTS:
-                continue
-            action = (
-                "disable"
-                if not restore
-                else "default"
-                if state == "default"
-                else "enable"
-                if state == "enabled"
-                else "disable"
+                actions.append(f"{action}\t{component}\n")
+            modes.append(
+                "remote-wipe-disable"
+                if self.block_remote_wipe
+                else "remote-wipe-restore"
             )
-            actions.append(f"{action}\t{component}\n")
-        if not restore:
-            account_backup = self.adb_run(
-                ["shell", "test", "-f", META_ACCOUNT_BACKUP_REMOTE], timeout=5
-            )
-            if account_backup.returncode == 0:
-                actions.append(f"enable\t{META_HARDWARE_AUTHENTICATOR}\n")
         self.push_text_atomic(
             "# portal-debloat-component-actions-v1\n" + "".join(actions),
             DEBLOAT_COMPONENT_ACTIONS_REMOTE,
@@ -4620,14 +4822,13 @@ class PortalProvisioner:
             check=True,
         )
         print(
-            f"DEBLOAT_COMPONENT_ACTIONS mode={'restore' if restore else 'disable'} "
+            f"COMPONENT_ACTIONS modes={','.join(modes) or 'none'} "
             f"count={len(actions)}"
         )
 
     def apply_debloat(self) -> None:
         self.ensure_debloat_backup()
         self.ensure_component_backup()
-        self.prepare_component_actions(restore=False)
         installed, _ = self.package_sets()
         for package in DEBLOAT_PACKAGES:
             if package not in installed:
@@ -4648,7 +4849,6 @@ class PortalProvisioner:
     def restore_debloat(self) -> None:
         states = self.read_debloat_backup(required=True)
         assert states is not None
-        self.prepare_component_actions(restore=True)
         installed, _ = self.package_sets()
         for package in DEBLOAT_PACKAGES:
             state = states[package]
@@ -4826,6 +5026,47 @@ class PortalProvisioner:
             "DEBLOAT_RESTORE_OK components="
             + ("verified" if require_components else "pending")
         )
+
+    def verify_remote_wipe_blocked(self) -> None:
+        saved = self.read_remote_wipe_backup(required=True)
+        assert saved is not None
+        current = self.current_named_component_states(
+            REMOTE_WIPE_COMPONENTS, detect_missing=True
+        )
+        mismatches = [
+            f"{component}={current[component]}"
+            for component in saved
+            if current[component] not in {"disabled", "absent"}
+        ]
+        if mismatches:
+            raise ProvisionError(
+                "Meta remote-wipe receivers became enabled: "
+                + "; ".join(mismatches)
+            )
+        print(
+            "REMOTE_WIPE_BLOCK_OK receivers_disabled="
+            + str(sum(state == "disabled" for state in current.values()))
+            + " receivers_absent="
+            + str(sum(state == "absent" for state in current.values()))
+        )
+
+    def verify_remote_wipe_restored(self) -> None:
+        saved = self.read_remote_wipe_backup(required=True)
+        assert saved is not None
+        current = self.current_named_component_states(
+            REMOTE_WIPE_COMPONENTS, detect_missing=True
+        )
+        mismatches = [
+            f"{component}={current[component]}, expected {state}"
+            for component, state in saved.items()
+            if state != "absent" and current[component] != state
+        ]
+        if mismatches:
+            raise ProvisionError(
+                "remote-wipe receiver restore mismatch: "
+                + "; ".join(mismatches)
+            )
+        print("REMOTE_WIPE_RESTORE_OK receivers=verified")
 
     def verify_presence_runtime(
         self,
@@ -5149,6 +5390,10 @@ class PortalProvisioner:
             self.verify_debloat()
         if self.restore_bloat:
             self.verify_debloat_restored()
+        if self.block_remote_wipe:
+            self.verify_remote_wipe_blocked()
+        if self.restore_remote_wipe:
+            self.verify_remote_wipe_restored()
         if self.remove_meta_accounts:
             if self.meta_accounts_auth_only:
                 disabled = self.disabled_meta_authenticators()
@@ -5769,6 +6014,7 @@ class PortalProvisioner:
                 self.attempts,
                 phase_logs,
                 debloat=True,
+                block_remote_wipe=self.block_remote_wipe,
                 skip_build=self.skip_build,
             ).provision()
             self.connect(wait_seconds=30)
@@ -5788,6 +6034,51 @@ class PortalProvisioner:
                 self.write_state("complete")
             print(
                 f"PROVISION_ALREADY_COMPLETE actions=debloat "
+                f"logs={self.log_dir}"
+            )
+            return
+        self.remote_wipe_already_configured = (
+            self.remote_wipe_preflight() if self.block_remote_wipe else False
+        )
+        if (
+            self.block_remote_wipe
+            and not self.remote_wipe_already_configured
+            and self.target
+            and self.target.shell_root_package_actions
+            and not set(self.requested_actions())
+            <= {"debloat", "restore_bloat", "block_remote_wipe", "restore_remote_wipe"}
+        ):
+            phase_logs = self.log_dir / "remote-wipe-bootstrap"
+            phase_logs.mkdir(parents=True, exist_ok=True)
+            print(
+                "REMOTE_WIPE_BOOTSTRAP_PHASE action=block "
+                "reason=root-shell-credential",
+                flush=True,
+            )
+            PortalProvisioner(
+                self.serial,
+                self.attempts,
+                phase_logs,
+                block_remote_wipe=True,
+                skip_build=self.skip_build,
+            ).provision()
+            self.connect(wait_seconds=30)
+            self.verify_target()
+            self.remote_wipe_already_configured = self.remote_wipe_preflight()
+            if not self.remote_wipe_already_configured:
+                raise ProvisionError(
+                    "the dedicated Aloha remote-wipe block did not verify"
+                )
+            self.write_state("pending")
+        if (
+            self.remote_wipe_already_configured
+            and not self.persist_wireless_adb
+            and self.requested_actions() == {"block_remote_wipe": True}
+        ):
+            if resumed_pending:
+                self.write_state("complete")
+            print(
+                "PROVISION_ALREADY_COMPLETE actions=block_remote_wipe "
                 f"logs={self.log_dir}"
             )
             return
@@ -5882,6 +6173,10 @@ class PortalProvisioner:
             self.apply_debloat()
         if self.restore_bloat:
             self.restore_debloat()
+        if self.block_remote_wipe and not self.remote_wipe_already_configured:
+            self.ensure_remote_wipe_backup()
+        if self.restore_remote_wipe:
+            self.read_remote_wipe_backup(required=True)
         if self.needs_uid1000_payload():
             self.prepare_camera_light_install()
         if self.disable_updates:
@@ -5898,11 +6193,8 @@ class PortalProvisioner:
             self.restore_app_verifier_setting()
         if self.kiosk_permissions:
             self.apply_kiosk_permissions()
-        if self.needs_component_ctl() and not (self.debloat or self.restore_bloat):
-            self.push_text_atomic(
-                "# portal-debloat-component-actions-v1\n",
-                DEBLOAT_COMPONENT_ACTIONS_REMOTE,
-            )
+        if self.needs_component_ctl():
+            self.prepare_component_actions()
 
         privileged_action = (
             self.persist_wireless_adb
@@ -5912,6 +6204,8 @@ class PortalProvisioner:
             or self.enable_updates
             or (self.debloat and not self.debloat_already_configured)
             or self.restore_bloat
+            or (self.block_remote_wipe and not self.remote_wipe_already_configured)
+            or self.restore_remote_wipe
             or (self.optimize_presence and not self.presence_already_configured)
             or self.restore_presence_profile
             or self.presence_fps_action_requested()
@@ -6270,6 +6564,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="restore the original MobileConfig override and re-enable OTA packages",
     )
+    remote_wipe_group = parser.add_mutually_exclusive_group()
+    remote_wipe_group.add_argument(
+        "--block-remote-wipe",
+        action="store_true",
+        help=(
+            "disable Meta's two known factory-reset and remote-wipe receivers "
+            "without disabling the rest of the device-admin package"
+        ),
+    )
+    remote_wipe_group.add_argument(
+        "--restore-remote-wipe",
+        action="store_true",
+        help=(
+            "restore the two Meta remote-wipe receivers to the component states "
+            "saved by the first --block-remote-wipe run"
+        ),
+    )
     camera_light_group = parser.add_mutually_exclusive_group()
     camera_light_group.add_argument(
         "--disable-camera-light",
@@ -6418,6 +6729,7 @@ def parse_args() -> argparse.Namespace:
                 (args.restore_audio, "--restore-audio"),
                 (args.restore_kiosk_home, "--restore-kiosk-home"),
                 (args.enable_updates, "--enable-updates"),
+                (args.restore_remote_wipe, "--restore-remote-wipe"),
                 (args.restore_bloat, "--restore-bloat"),
                 (args.restore_presence_profile, "--restore-presence-profile"),
                 (args.restore_presence_fps, "--restore-presence-fps"),
@@ -6436,6 +6748,7 @@ def parse_args() -> argparse.Namespace:
         args.device_owner = True
         args.kiosk_home = True
         args.disable_updates = True
+        args.block_remote_wipe = True
         args.debloat = True
         args.remove_meta_accounts = True
         args.optimize_presence = True
@@ -6452,6 +6765,8 @@ def parse_args() -> argparse.Namespace:
             args.restore_kiosk_home,
             args.disable_updates,
             args.enable_updates,
+            args.block_remote_wipe,
+            args.restore_remote_wipe,
             args.debloat,
             args.restore_bloat,
             args.remove_meta_accounts,
@@ -6514,6 +6829,8 @@ def main() -> int:
             restore_kiosk_home=args.restore_kiosk_home,
             disable_updates=args.disable_updates,
             enable_updates=args.enable_updates,
+            block_remote_wipe=args.block_remote_wipe,
+            restore_remote_wipe=args.restore_remote_wipe,
             debloat=args.debloat,
             restore_bloat=args.restore_bloat,
             remove_meta_accounts=args.remove_meta_accounts,

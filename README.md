@@ -43,6 +43,7 @@ Persistent features use focused configuration changes or small boot helpers.
 | [Kiosk Satellite Device Owner](#make-kiosk-satellite-the-device-owner) | Gives Kiosk Satellite Android's strongest kiosk-management role. |
 | [Persistent Kiosk Satellite home](#use-kiosk-satellite-as-the-home-screen) | Starts Kiosk Satellite at boot and keeps obsolete Meta screens out of the way. |
 | [Firmware-update blocking](#disable-automatic-meta-firmware-updates) | Prevents an unexpected Meta update from breaking a known working setup. |
+| [Meta remote-wipe blocking](#block-metas-known-remote-wipe-receivers) | Disables Meta's known remote factory-reset entry points while retaining local recovery options. |
 | [Meta app debloat](#disable-unused-meta-applications) | Reduces background work from unused Meta apps, cloud clients and diagnostics. |
 | [Meta-account removal](#remove-local-meta-accounts) | Removes obsolete local account data while retaining services needed by the camera and Portal. |
 | [Presence optimization](#reduce-aiservice-cpu-use-while-preserving-presence-detection) | Lowers AIService CPU use while preserving full-view, LED-free person detection. |
@@ -200,9 +201,9 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
 
 The `kiosk` profile installs Kiosk Satellite when needed, then configures its
 required permissions, Device Owner and HOME role. It also configures audio,
-firmware blocking, debloat, Meta-account removal, presence optimization and
-third-party app updates. These core features do not need to be added as
-individual flags.
+firmware and remote-wipe blocking, debloat, Meta-account removal, presence
+optimization and third-party app updates. These core features do not need to
+be added as individual flags.
 
 Add only the extra features you want:
 
@@ -412,6 +413,36 @@ Restore that exact override state and re-enable both OTA packages with:
 ```sh
 python3 tools/provision_portal.py \
   --serial "$PORTAL_IP:5555" --enable-updates
+```
+
+</details>
+
+<a id="block-metas-known-remote-wipe-receivers"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Block Meta's known remote-wipe receivers</summary>
+<p></p>
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --block-remote-wipe
+```
+
+Meta's privileged `com.facebook.alohaservices.deviceadmin` package contains a
+factory-reset receiver and a cloud-notification remote-wipe receiver. This
+action disables only those two components. The rest of the package remains
+enabled, and hardware or recovery-menu factory resets remain available.
+
+The provisioner records the original state of each receiver, applies the
+change through Android's Package Manager, and verifies that both receivers
+remain disabled across two boots. It does not claim to block every possible
+privileged Android reset path; it blocks the two known Meta remote-wipe entry
+points present in the supported firmware.
+
+Restore both receivers to their individually saved states with:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-remote-wipe
 ```
 
 </details>
@@ -1050,8 +1081,9 @@ python3 tools/provision_portal.py \
 
 The report includes exact target support, boot and SELinux state, Kiosk
 Satellite version, permissions and Device Owner state, audio and OTA markers,
-debloat and account status, the live presence pipeline, Private DNS, Shizuku
-package and server state, and the last provisioning manifest.
+remote-wipe protection, debloat and account status, the live presence pipeline,
+Private DNS, Shizuku package and server state, and the last provisioning
+manifest.
 
 ### Dry-run planning
 
