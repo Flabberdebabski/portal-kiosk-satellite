@@ -80,6 +80,10 @@ SHIZUKU_APK_SHA256 = (
 )
 STATE_REMOTE = "/data/local/tmp/portal-provision-state-v1.json"
 PRIVACY_BACKUP_REMOTE = "/data/local/tmp/portal-private-dns-before-v1.json"
+ADB_AUTH_TIMEOUT_SETTING = "adb_allowed_connection_time"
+ADB_AUTH_TIMEOUT_BACKUP_REMOTE = (
+    "/data/local/tmp/portal-adb-auth-timeout-before-v1.json"
+)
 KIOSK_COMPONENT = "me.jxl.kiosk_satellite/.KioskAdminReceiver"
 KIOSK_PACKAGE = "me.jxl.kiosk_satellite"
 KIOSK_HOME_COMPONENT = "me.jxl.kiosk_satellite/.HomeAlias"
@@ -259,6 +263,8 @@ class PortalProvisioner:
         recover: bool = False,
         skip_build: bool = False,
         persistent_wireless_adb: bool = False,
+        disable_adb_auth_timeout: bool = False,
+        restore_adb_auth_timeout: bool = False,
         wireless_adb_only: bool = False,
         meta_accounts_local_only: bool = False,
         meta_accounts_auth_only: bool = False,
@@ -317,6 +323,10 @@ class PortalProvisioner:
         self.recover = recover
         self.skip_build = skip_build
         self.persistent_wireless_adb = persistent_wireless_adb
+        self.disable_adb_auth_timeout = (
+            disable_adb_auth_timeout or persistent_wireless_adb
+        )
+        self.restore_adb_auth_timeout = restore_adb_auth_timeout
         self.wireless_adb_only = wireless_adb_only
         self.meta_accounts_local_only = meta_accounts_local_only
         self.meta_accounts_auth_only = meta_accounts_auth_only
@@ -613,6 +623,8 @@ class PortalProvisioner:
         actions: dict[str, object] = {}
         for name in (
             "persistent_wireless_adb",
+            "disable_adb_auth_timeout",
+            "restore_adb_auth_timeout",
             "audio",
             "restore_audio",
             "install_kiosk_satellite",
@@ -991,6 +1003,9 @@ class PortalProvisioner:
         package_verifier_setting = shell(
             "settings", "get", "global", "package_verifier_enable", timeout=5
         )
+        adb_auth_timeout = shell(
+            "settings", "get", "global", ADB_AUTH_TIMEOUT_SETTING, timeout=5
+        )
         process_list = shell("ps", "-A", "-o", "USER,PID,PPID,NAME,ARGS")
         shizuku_process = next(
             (line for line in process_list.splitlines() if "shizuku_server" in line),
@@ -1054,6 +1069,15 @@ class PortalProvisioner:
                 ),
                 "wireless_adb_persistence_verified": exists(
                     WIRELESS_ADB_INSTALLED_REMOTE
+                ),
+                "adb_auth_allowed_connection_time_ms": (
+                    int(adb_auth_timeout)
+                    if adb_auth_timeout.isdigit()
+                    else None
+                ),
+                "adb_auth_timeout_disabled": adb_auth_timeout == "0",
+                "adb_auth_timeout_backup_present": exists(
+                    ADB_AUTH_TIMEOUT_BACKUP_REMOTE
                 ),
                 "aiservice_pid": shell(
                     "pidof", "com.facebook.portal.aiservice", timeout=5
@@ -1375,6 +1399,7 @@ class PortalProvisioner:
         app_updates = status.get("app_updates", {})
         shizuku = status.get("shizuku", {})
         camera_light = status.get("camera_light", {})
+        runtime = status.get("runtime", {})
         current = {
             "audio": audio.get("state") if isinstance(audio, dict) else None,
             "install_kiosk_satellite": (
@@ -1405,6 +1430,11 @@ class PortalProvisioner:
             "shizuku": shizuku if isinstance(shizuku, dict) else None,
             "camera_light": (
                 camera_light if isinstance(camera_light, dict) else None
+            ),
+            "adb_auth_timeout_disabled": (
+                runtime.get("adb_auth_timeout_disabled")
+                if isinstance(runtime, dict)
+                else None
             ),
         }
         required_outputs = []
@@ -1437,6 +1467,8 @@ class PortalProvisioner:
                 if set(actions) <= {
                     "install_kiosk_satellite",
                     "kiosk_permissions",
+                    "disable_adb_auth_timeout",
+                    "restore_adb_auth_timeout",
                 }
                 else 2
             ),
@@ -1486,6 +1518,7 @@ class PortalProvisioner:
                 REMOTE_WIPE_BACKUP_REMOTE,
                 META_ACCOUNT_BACKUP_REMOTE,
                 PRIVACY_BACKUP_REMOTE,
+                ADB_AUTH_TIMEOUT_BACKUP_REMOTE,
                 APP_VERIFIER_BACKUP_REMOTE,
                 "/data/local/tmp/portal-ota-backup",
                 "/data/local/tmp/portal-presence-backup",
@@ -1554,6 +1587,104 @@ class PortalProvisioner:
                 timeout=5,
                 check=True,
             )
+
+    def backup_adb_auth_timeout(self) -> None:
+        existing = self.adb_run(
+            ["shell", "cat", ADB_AUTH_TIMEOUT_BACKUP_REMOTE], timeout=5
+        )
+        if existing.returncode == 0:
+            self.read_adb_auth_timeout_backup()
+            return
+        original = self.adb_run(
+            ["shell", "settings", "get", "global", ADB_AUTH_TIMEOUT_SETTING],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        if original != "null" and not re.fullmatch(r"\d{1,19}", original):
+            raise ProvisionError(
+                f"invalid existing ADB authorization timeout: {original!r}"
+            )
+        self.push_text_atomic(
+            json.dumps({"schema": 1, "value": original}, indent=2) + "\n",
+            ADB_AUTH_TIMEOUT_BACKUP_REMOTE,
+        )
+
+    def read_adb_auth_timeout_backup(self) -> str:
+        result = self.adb_run(
+            ["shell", "cat", ADB_AUTH_TIMEOUT_BACKUP_REMOTE],
+            timeout=5,
+        )
+        if result.returncode != 0:
+            raise ProvisionError(
+                "ADB authorization timeout backup is absent; nothing can be restored"
+            )
+        try:
+            backup = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ProvisionError(
+                f"invalid ADB authorization timeout backup: {exc}"
+            ) from exc
+        value = backup.get("value") if isinstance(backup, dict) else None
+        if (
+            not isinstance(backup, dict)
+            or backup.get("schema") != 1
+            or not isinstance(value, str)
+            or (value != "null" and not re.fullmatch(r"\d{1,19}", value))
+        ):
+            raise ProvisionError("unrecognized ADB authorization timeout backup")
+        return value
+
+    def disable_adb_authorization_timeout(self) -> None:
+        self.backup_adb_auth_timeout()
+        self.adb_run(
+            [
+                "shell",
+                "settings",
+                "put",
+                "global",
+                ADB_AUTH_TIMEOUT_SETTING,
+                "0",
+            ],
+            timeout=10,
+            check=True,
+        )
+        self.verify_adb_auth_timeout()
+
+    def restore_adb_authorization_timeout(self) -> None:
+        original = self.read_adb_auth_timeout_backup()
+        command = [
+            "shell",
+            "settings",
+            "delete" if original == "null" else "put",
+            "global",
+            ADB_AUTH_TIMEOUT_SETTING,
+        ]
+        if original != "null":
+            command.append(original)
+        self.adb_run(command, timeout=10, check=True)
+        self.verify_adb_auth_timeout()
+
+    def verify_adb_auth_timeout(self) -> None:
+        actual = self.adb_run(
+            ["shell", "settings", "get", "global", ADB_AUTH_TIMEOUT_SETTING],
+            timeout=5,
+            check=True,
+        ).stdout.strip()
+        expected = (
+            self.read_adb_auth_timeout_backup()
+            if self.restore_adb_auth_timeout
+            else "0"
+        )
+        if actual != expected:
+            raise ProvisionError(
+                "ADB authorization timeout did not persist: "
+                f"setting={actual!r}/{expected!r}"
+            )
+        action = "restored" if self.restore_adb_auth_timeout else "disabled"
+        print(
+            f"ADB_AUTH_TIMEOUT_OK action={action} "
+            f"{ADB_AUTH_TIMEOUT_SETTING}={actual}"
+        )
 
     def apply_privacy_dns(self) -> None:
         if not self.privacy_dns:
@@ -2705,6 +2836,8 @@ class PortalProvisioner:
             raise ProvisionError("pending state has no action map")
         allowed = set(self.requested_actions()) | {
             "persistent_wireless_adb",
+            "disable_adb_auth_timeout",
+            "restore_adb_auth_timeout",
             "audio",
             "restore_audio",
             "install_kiosk_satellite",
@@ -5404,6 +5537,8 @@ class PortalProvisioner:
                 "WIRELESS_ADB_OK persistent_port=5555 "
                 f"property={property_name}"
             )
+        if self.disable_adb_auth_timeout or self.restore_adb_auth_timeout:
+            self.verify_adb_auth_timeout()
         if self.audio:
             self.verify_watchdog()
         if self.restore_audio:
@@ -5740,6 +5875,7 @@ class PortalProvisioner:
             self.privileged_requested() and persistent_port != "5555"
         )
         if self.persist_wireless_adb:
+            self.disable_adb_auth_timeout = True
             print(
                 "STOCK_ADB_REENABLE_REQUIRED "
                 f"property={persistent_property} persistent_port=unset\n"
@@ -6220,6 +6356,10 @@ class PortalProvisioner:
             self.prepare_camera_light_install()
         if self.disable_updates:
             self.disable_ota_packages()
+        if self.disable_adb_auth_timeout:
+            self.disable_adb_authorization_timeout()
+        if self.restore_adb_auth_timeout:
+            self.restore_adb_authorization_timeout()
         if self.privacy_dns:
             self.apply_privacy_dns()
         if self.dhcp_dns:
@@ -6264,6 +6404,8 @@ class PortalProvisioner:
             if set(self.requested_actions()) <= {
                 "install_kiosk_satellite",
                 "kiosk_permissions",
+                "disable_adb_auth_timeout",
+                "restore_adb_auth_timeout",
             }:
                 self.verify_requested_state()
                 self.write_state("complete")
@@ -6486,6 +6628,23 @@ def parse_args() -> argparse.Namespace:
         help=(
             "make wireless ADB on TCP port 5555 survive reboots without "
             "applying any other provisioning feature"
+        ),
+    )
+    adb_auth_group = parser.add_mutually_exclusive_group()
+    adb_auth_group.add_argument(
+        "--disable-adb-auth-timeout",
+        action="store_true",
+        help=(
+            "keep previously approved ADB host keys authorized indefinitely; "
+            "this does not disable ADB authentication"
+        ),
+    )
+    adb_auth_group.add_argument(
+        "--restore-adb-auth-timeout",
+        action="store_true",
+        help=(
+            "restore the ADB authorization timeout saved by the first "
+            "--disable-adb-auth-timeout run"
         ),
     )
     parser.add_argument(
@@ -6773,6 +6932,7 @@ def parse_args() -> argparse.Namespace:
                 (args.restore_presence_profile, "--restore-presence-profile"),
                 (args.restore_presence_fps, "--restore-presence-fps"),
                 (args.restore_app_verifier, "--restore-app-verifier"),
+                (args.restore_adb_auth_timeout, "--restore-adb-auth-timeout"),
             )
             if enabled
         ]
@@ -6792,9 +6952,19 @@ def parse_args() -> argparse.Namespace:
         args.remove_meta_accounts = True
         args.optimize_presence = True
         args.allow_app_updates = True
+        args.disable_adb_auth_timeout = True
+    if args.persistent_wireless_adb:
+        if args.restore_adb_auth_timeout:
+            parser.error(
+                "--persistent-wireless-adb cannot be combined with "
+                "--restore-adb-auth-timeout"
+            )
+        args.disable_adb_auth_timeout = True
     selected = any(
         (
             args.persistent_wireless_adb,
+            args.disable_adb_auth_timeout,
+            args.restore_adb_auth_timeout,
             args.audio,
             args.restore_audio,
             args.install_kiosk_satellite,
@@ -6893,6 +7063,8 @@ def main() -> int:
             recover=args.recover,
             skip_build=args.skip_build,
             persistent_wireless_adb=args.persistent_wireless_adb,
+            disable_adb_auth_timeout=args.disable_adb_auth_timeout,
+            restore_adb_auth_timeout=args.restore_adb_auth_timeout,
         ).provision()
     except (ProvisionError, OSError, zipfile.BadZipFile) as exc:
         print(f"PROVISION_ERROR: {exc}", file=sys.stderr)

@@ -12,6 +12,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from provision_portal import (  # noqa: E402
+    ADB_AUTH_TIMEOUT_BACKUP_REMOTE,
     KIOSK_RELEASE_DOWNLOAD_PREFIX,
     REMOTE_WIPE_COMPONENTS,
     PortalProvisioner,
@@ -41,9 +42,122 @@ class PersistentWirelessAdbCliTest(unittest.TestCase):
             )
             self.assertEqual(
                 provisioner.requested_actions(),
-                {"persistent_wireless_adb": True},
+                {
+                    "persistent_wireless_adb": True,
+                    "disable_adb_auth_timeout": True,
+                },
             )
             self.assertTrue(provisioner.privileged_requested())
+
+    def test_cli_pairs_persistent_wireless_adb_with_non_expiring_auth(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["provision_portal.py", "--persistent-wireless-adb"],
+        ):
+            arguments = parse_args()
+
+        self.assertTrue(arguments.disable_adb_auth_timeout)
+
+    def test_persistent_wireless_adb_rejects_timeout_restore(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "provision_portal.py",
+                "--persistent-wireless-adb",
+                "--restore-adb-auth-timeout",
+            ],
+        ):
+            with self.assertRaises(SystemExit):
+                parse_args()
+
+
+class AdbAuthorizationTimeoutCliTest(unittest.TestCase):
+    def test_standalone_flag_needs_no_root_action(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["provision_portal.py", "--disable-adb-auth-timeout"],
+        ):
+            arguments = parse_args()
+
+        self.assertTrue(arguments.disable_adb_auth_timeout)
+        self.assertFalse(arguments.audio)
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                disable_adb_auth_timeout=True,
+            )
+            self.assertEqual(
+                provisioner.requested_actions(),
+                {"disable_adb_auth_timeout": True},
+            )
+            self.assertFalse(provisioner.privileged_requested())
+
+    def test_disable_and_restore_preserve_an_absent_original_setting(self) -> None:
+        current = {"value": "null"}
+        saved: list[str] = []
+
+        def adb_run(
+            arguments: list[str],
+            timeout: float | None = None,
+            check: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout, check
+            if arguments[:2] == ["shell", "cat"]:
+                if not saved:
+                    return subprocess.CompletedProcess(arguments, 1, "")
+                return subprocess.CompletedProcess(arguments, 0, saved[0])
+            if arguments[:5] == [
+                "shell", "settings", "get", "global", "adb_allowed_connection_time"
+            ]:
+                return subprocess.CompletedProcess(
+                    arguments, 0, current["value"] + "\n"
+                )
+            if arguments[1:4] == ["settings", "put", "global"]:
+                current["value"] = arguments[-1]
+            elif arguments[1:4] == ["settings", "delete", "global"]:
+                current["value"] = "null"
+            return subprocess.CompletedProcess(arguments, 0, "")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                disable_adb_auth_timeout=True,
+            )
+            with (
+                mock.patch.object(provisioner, "adb_run", side_effect=adb_run),
+                mock.patch.object(
+                    provisioner,
+                    "push_text_atomic",
+                    side_effect=lambda contents, remote: (
+                        self.assertEqual(remote, ADB_AUTH_TIMEOUT_BACKUP_REMOTE),
+                        saved.append(contents),
+                    ),
+                ),
+            ):
+                provisioner.disable_adb_authorization_timeout()
+                self.assertEqual(current["value"], "0")
+                provisioner.disable_adb_auth_timeout = False
+                provisioner.restore_adb_auth_timeout = True
+                provisioner.restore_adb_authorization_timeout()
+
+        self.assertEqual(current["value"], "null")
+
+    def test_kiosk_profile_includes_non_expiring_adb_authorization(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["provision_portal.py", "--profile", "kiosk"],
+        ):
+            arguments = parse_args()
+
+        self.assertTrue(arguments.disable_adb_auth_timeout)
 
 
 class ShizukuCliTest(unittest.TestCase):

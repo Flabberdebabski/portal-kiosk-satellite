@@ -36,6 +36,7 @@ Persistent features use focused configuration changes or small boot helpers.
 | --- | --- |
 | [Temporary root provisioning](#how-the-root-exploit-works) | Opens a short privileged window for selected changes, then returns the Portal to normal enforcing mode. |
 | [Persistent wireless ADB](#enable-only-persistent-wireless-adb) | Keeps ADB available on port 5555 after setup, so future reboots no longer require USB activation. |
+| [Non-expiring ADB authorization](#disable-adb-authorization-timeout) | Keeps computers you already approved authorized instead of forgetting their ADB keys after Android's timeout. |
 | [Complete kiosk profile](#run-the-provisioner) | Applies the recommended Kiosk Satellite setup with one command. |
 | [Kiosk Satellite installation](#install-kiosk-satellite) | Downloads, verifies and installs the latest compatible Kiosk Satellite release when the app is missing. |
 | [Hardware audio processing control](#disable-hardware-echo-cancellation-and-noise-suppression) | Stops the Portal from suppressing microphone audio while its speaker is playing audio or music. |
@@ -202,8 +203,8 @@ python3 tools/provision_portal.py --serial "$PORTAL_IP:5555" \
 The `kiosk` profile installs Kiosk Satellite when needed, then configures its
 required permissions, Device Owner and HOME role. It also configures audio,
 firmware and remote-wipe blocking, debloat, Meta-account removal, presence
-optimization and third-party app updates. These core features do not need to
-be added as individual flags.
+optimization, third-party app updates and non-expiring ADB authorization. These
+core features do not need to be added as individual flags.
 
 Add only the extra features you want:
 
@@ -234,12 +235,45 @@ python3 tools/provision_portal.py \
 
 This applies only wireless ADB persistence on TCP port 5555. It does not
 enable audio changes, debloat, Device Owner, presence optimization, Shizuku,
-or the other provisioning features. Wireless ADB persistence is already
-installed automatically whenever another privileged provisioning action runs.
+or the other provisioning features. It also disables Android's authorization
+timeout so computers you already approved do not lose access later. Wireless
+ADB persistence is already installed automatically whenever another privileged
+provisioning action runs; a new persistence install also disables the
+authorization timeout.
 
 On a stock Portal, continue manually enabling ADB in the Debug menu and running
 `adb -d tcpip 5555` after each provisioning reboot until the command prints
 `WIRELESS_ADB_OK`. Later reboots no longer require the USB host.
+
+</details>
+<p></p>
+
+<a id="disable-adb-authorization-timeout"></a>
+<details>
+<summary><strong>Included in the kiosk profile:</strong> Keep approved ADB computers authorized</summary>
+<p></p>
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --disable-adb-auth-timeout
+```
+
+Android normally expires approved ADB host keys after a period of inactivity.
+This sets `adb_allowed_connection_time` to `0`, which tells Android to retain
+previously approved keys indefinitely. A new computer must still be approved on
+the Portal; this does not disable ADB authentication. The provisioner saves the
+original setting before changing it.
+
+This standalone action uses ordinary ADB authority and does not run the root
+exploit or reboot the Portal.
+
+`--persistent-wireless-adb` applies this setting automatically. To restore the
+saved timeout, run:
+
+```sh
+python3 tools/provision_portal.py \
+  --serial "$PORTAL_IP:5555" --restore-adb-auth-timeout
+```
 
 </details>
 <p></p>
