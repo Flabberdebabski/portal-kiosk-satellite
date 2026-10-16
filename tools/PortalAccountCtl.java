@@ -1,6 +1,7 @@
 import android.accounts.Account;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteDatabaseLockedException;
 import android.database.sqlite.SQLiteException;
 import android.os.IBinder;
 import android.os.Looper;
@@ -52,7 +53,7 @@ public final class PortalAccountCtl {
         return offset == header.length && Arrays.equals(header, SQLITE_HEADER);
     }
 
-    private static int removeLocalIdentityRows() throws Exception {
+    private static int removeLocalIdentityRowsOnce() throws Exception {
         int total = 0;
         Set<String> targets = new HashSet<>(Arrays.asList(
                 "device_accounts",
@@ -146,6 +147,23 @@ public final class PortalAccountCtl {
                     "identity tables not found: " + targets);
         }
         return total;
+    }
+
+    private static int removeLocalIdentityRows() throws Exception {
+        final int attempts = 30;
+        for (int attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                return removeLocalIdentityRowsOnce();
+            } catch (SQLiteDatabaseLockedException locked) {
+                if (attempt == attempts) {
+                    throw locked;
+                }
+                System.out.println("PORTAL_META_LOCAL_BUSY attempt=" + attempt
+                        + " retry_ms=500");
+                Thread.sleep(500);
+            }
+        }
+        throw new IllegalStateException("unreachable SQLite retry state");
     }
 
     private static Object accountService() throws Exception {

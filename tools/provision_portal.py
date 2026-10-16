@@ -2096,6 +2096,19 @@ class PortalProvisioner:
                 + launch.stdout[-2000:].strip()
             )
         self.verify_kiosk_permissions()
+        settle_seconds = (
+            self.target.kiosk_permission_settle_seconds
+            if self.target is not None
+            else 0
+        )
+        if settle_seconds:
+            print(
+                "KIOSK_PERMISSION_STATE_SETTLE "
+                f"seconds={settle_seconds}",
+                flush=True,
+            )
+            time.sleep(settle_seconds)
+            self.verify_kiosk_permissions()
 
     def verify_kiosk_permissions(self) -> None:
         status = self.kiosk_permission_status()
@@ -3528,7 +3541,9 @@ class PortalProvisioner:
                     "GHOSTLOCK_KGSL_ORDER2": "1",
                     "GHOSTLOCK_KGSL_WATCH": "1",
                     "GHOSTLOCK_KGSL_HOLD": "1024",
-                    "GHOSTLOCK_KGSL_RECLAIM": "4096",
+                    "GHOSTLOCK_KGSL_RECLAIM": str(
+                        self.target.kgsl_reclaim_allocations
+                    ),
                     "GHOSTLOCK_KGSL_RECLAIM_EARLY": "512",
                     "GHOSTLOCK_FOPS_TILE_TABLES": "1",
                 }
