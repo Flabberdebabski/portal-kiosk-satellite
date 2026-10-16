@@ -858,6 +858,16 @@ obsolete invalid-owner HOME screen. Use `--kiosk-home` after Kiosk Satellite is
 Device Owner, or use `--profile kiosk`, to keep the account warning from taking
 focus.
 
+Meta's production Debug page also builds its ADB row from the signed-in owner
+profile. After the local Meta accounts are removed, that page may appear empty
+even though ADB remains enabled and wireless ADB remains available. To open the
+firmware's full Debug page from an authorized ADB computer, run:
+
+```sh
+adb -s "$PORTAL_IP:5555" shell am start \
+  -a com.facebook.aloha.system.settings.DEBUG_TAB
+```
+
 </details>
 
 <a id="reduce-aiservice-cpu-use-while-preserving-presence-detection"></a>
