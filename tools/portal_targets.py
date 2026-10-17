@@ -229,6 +229,7 @@ TARGETS = (
         ota_installer_credentials=True,
         meta_accounts_system_credentials=True,
         meta_accounts_skip_force_stop=True,
+        meta_accounts_package_bootstrap=True,
         shell_root_package_actions=True,
         presence_installer_credentials=True,
         presence_runtime_keys=(

@@ -29,7 +29,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
                 )
             )
 
-    def test_portal_go_and_first_generation_portal_plus_are_unchanged(self) -> None:
+    def test_portal_go_and_first_generation_portal_plus_profiles(self) -> None:
         targets = {target.key: target for target in TARGETS}
         terry = targets["portal-go-terry-5051355900018050"]
         cipher = targets["portal-plus-cipher-4051355900018050"]
@@ -77,7 +77,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertTrue(aloha.uid1000_embedded_helper)
         self.assertTrue(aloha.uid1000_installer_credentials)
         self.assertTrue(aloha.meta_accounts_skip_force_stop)
-        self.assertFalse(aloha.meta_accounts_package_bootstrap)
+        self.assertTrue(aloha.meta_accounts_package_bootstrap)
 
         self.assertEqual(cipher.key, "portal-plus-cipher-4051355900018050")
         self.assertEqual(cipher.stack_route, "sendmmsg")
@@ -161,6 +161,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
         targets = {target.key: target for target in TARGETS}
         portal_plus = targets["portal-plus-aloha-1041515800015050"]
         portal = targets["portal-10-aloha-1041515800015050"]
+        self.assertTrue(portal_plus.meta_accounts_package_bootstrap)
         self.assertTrue(portal.meta_accounts_package_bootstrap)
         self.assertEqual(portal.kgsl_reclaim_allocations, 8192)
         self.assertEqual(portal_plus.kgsl_reclaim_allocations, 4096)
@@ -209,6 +210,7 @@ class PortalTargetSelectionTest(unittest.TestCase):
             "ota_installer_credentials",
             "meta_accounts_system_credentials",
             "meta_accounts_skip_force_stop",
+            "meta_accounts_package_bootstrap",
             "shell_root_package_actions",
             "presence_installer_credentials",
             "presence_runtime_keys",
