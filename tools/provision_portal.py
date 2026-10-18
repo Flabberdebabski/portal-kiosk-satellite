@@ -2558,7 +2558,20 @@ class PortalProvisioner:
     def install_apk_preserving_verifier(self, apk: pathlib.Path, tag: str) -> None:
         """Install an APK while restoring Meta's certificate verifier state."""
         remote = f"/data/local/tmp/portal-{tag}-install.apk"
-        self.adb_run(["push", str(apk), remote], timeout=600, check=True)
+        # Remote support tunnels can sustain far less throughput than a local
+        # USB or LAN ADB connection. Allow at least 32 KiB/s plus two minutes
+        # of protocol/setup overhead so large Kiosk Satellite releases are not
+        # killed near the end of an otherwise healthy transfer.
+        push_timeout = max(
+            600,
+            (apk.stat().st_size + 32 * 1024 - 1) // (32 * 1024) + 120,
+        )
+        print(
+            f"APK_PUSH package_source={apk.name} "
+            f"bytes={apk.stat().st_size} timeout={push_timeout}",
+            flush=True,
+        )
+        self.adb_run(["push", str(apk), remote], timeout=push_timeout, check=True)
         disabled = self.adb_run(
             ["shell", "pm", "list", "packages", "-d", "-u"],
             timeout=15,
@@ -5172,7 +5185,7 @@ class PortalProvisioner:
             flush=True,
         )
         time.sleep(PACKAGE_STATE_SETTLE_SECONDS)
-        self.adb_run(["shell", "sync"], timeout=15, check=True)
+        self.adb_run(["shell", "sync"], timeout=60, check=True)
 
     def verify_retained_platform(self, wait_seconds: int = 45) -> None:
         deadline = time.monotonic() + wait_seconds
