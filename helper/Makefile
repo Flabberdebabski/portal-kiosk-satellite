@@ -1,10 +1,8 @@
-SDK ?= /home/jxlarrea/android-sdk
-NDK ?= $(SDK)/ndk/28.2.13676358
+include ../android-env.mk
+
 TOOLCHAIN ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64
 NATIVE_CC := $(TOOLCHAIN)/bin/armv7a-linux-androideabi29-clang
 NATIVE_CC_API28 := $(TOOLCHAIN)/bin/armv7a-linux-androideabi28-clang
-BUILD_TOOLS ?= $(SDK)/build-tools/37.0.0
-ANDROID_JAR ?= $(SDK)/platforms/android-36/android.jar
 BUILD := build
 CLASSES := $(BUILD)/classes
 DEX := $(BUILD)/dex
@@ -13,7 +11,6 @@ ALIGNED := $(BUILD)/portal-audio-helper-aligned.apk
 APK := $(BUILD)/portal-audio-helper.apk
 PERSIST_SO := $(BUILD)/libportal_audio_persist.so
 PERSIST_JAVA_SO := $(BUILD)/libportal_audio_persist_java.so
-KEYSTORE ?= /home/jxlarrea/.android/debug.keystore
 SOURCES := $(shell find src -name '*.java' -type f)
 
 .PHONY: all clean native native-java

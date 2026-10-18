@@ -132,13 +132,18 @@ adb shell uname -a
 ### 1. Install and configure the host tools
 
 Install the tools listed under [Requirements](#requirements), then clone the
-repository and point the build at your Android SDK. Adjust the Build Tools path
-if your installed version differs.
+repository. The provisioner automatically finds an SDK installed at
+`$HOME/Android/Sdk` or `$HOME/android-sdk`.
 
 ```sh
 git clone https://github.com/jxlarrea/portal-root-kiosk-satellite.git
 cd portal-root-kiosk-satellite
+```
 
+If your SDK is somewhere else, set these paths in the terminal where you run
+the provisioner:
+
+```sh
 export ANDROID_SDK_ROOT="$HOME/Android/Sdk"
 export NDK="$ANDROID_SDK_ROOT/ndk/28.2.13676358"
 export ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/android-36/android.jar"

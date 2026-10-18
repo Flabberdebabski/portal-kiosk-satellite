@@ -164,9 +164,9 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertTrue(portal_plus.meta_accounts_package_bootstrap)
         self.assertTrue(portal.meta_accounts_package_bootstrap)
         self.assertEqual(portal.kgsl_reclaim_allocations, 8192)
-        self.assertEqual(portal_plus.kgsl_reclaim_allocations, 4096)
+        self.assertEqual(portal_plus.kgsl_reclaim_allocations, 8192)
         self.assertEqual(portal.mm_recycle_slabs, 40)
-        self.assertEqual(portal_plus.mm_recycle_slabs, 20)
+        self.assertEqual(portal_plus.mm_recycle_slabs, 40)
         self.assertEqual(portal.kiosk_permission_settle_seconds, 30)
         self.assertEqual(portal_plus.kiosk_permission_settle_seconds, 0)
 
@@ -193,6 +193,8 @@ class PortalTargetSelectionTest(unittest.TestCase):
             "route_delay_usec",
             "proc_uid_sentinel",
             "kgsl_reclaim",
+            "kgsl_reclaim_allocations",
+            "mm_recycle_slabs",
             "reclaim_pairs",
             "reclaim_sends",
             "uid1000_host_package",

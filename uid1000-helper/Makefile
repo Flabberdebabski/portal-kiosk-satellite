@@ -1,14 +1,10 @@
-SDK ?= $(if $(ANDROID_SDK_ROOT),$(ANDROID_SDK_ROOT),/home/jxlarrea/android-sdk)
-NDK ?= $(SDK)/ndk/28.2.13676358
+include ../android-env.mk
+
 TOOLCHAIN ?= $(NDK)/toolchains/llvm/prebuilt/linux-x86_64
 CXX := $(TOOLCHAIN)/bin/aarch64-linux-android29-clang++
 CC := $(TOOLCHAIN)/bin/aarch64-linux-android29-clang
 OBJCOPY := $(TOOLCHAIN)/bin/llvm-objcopy
 JAVAC ?= javac
-D8 ?= $(SDK)/build-tools/36.0.0/d8
-BUILD_TOOLS ?= $(SDK)/build-tools/37.0.0
-ANDROID_JAR ?= $(SDK)/platforms/android-36/android.jar
-KEYSTORE ?= $(HOME)/.android/debug.keystore
 BUILD := build
 WATCH := $(BUILD)/portal-camera-led-watch
 HOOK_OBJECT := $(BUILD)/portal-uid1000-hook.o

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,6 +19,7 @@ from provision_portal import (  # noqa: E402
     REMOTE_WIPE_COMPONENTS,
     PortalProvisioner,
     ProvisionError,
+    android_build_environment,
     parse_args,
 )
 
@@ -72,6 +75,64 @@ class PersistentWirelessAdbCliTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 parse_args()
 
+
+class AndroidBuildEnvironmentTest(unittest.TestCase):
+    def test_build_files_do_not_contain_an_author_home_path(self) -> None:
+        build_files = [ROOT / "android-env.mk", *ROOT.glob("*/Makefile")]
+        for path in build_files:
+            self.assertNotIn("/home/jxlarrea", path.read_text(), str(path))
+
+    def test_explicit_sdk_root_is_propagated_to_make(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk = pathlib.Path(temporary) / "sdk"
+            ndk = sdk / "ndk" / "28.2.13676358"
+            toolchain = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin"
+            build_tools = sdk / "build-tools" / "37.0.0"
+            platform = sdk / "platforms" / "android-36"
+            for path in (
+                toolchain / "aarch64-linux-android29-clang",
+                toolchain / "armv7a-linux-androideabi28-clang",
+                toolchain / "armv7a-linux-androideabi29-clang",
+                build_tools / "aapt",
+                build_tools / "apksigner",
+                build_tools / "zipalign",
+                build_tools / "d8",
+                platform / "android.jar",
+            ):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"ANDROID_SDK_ROOT": str(sdk)},
+                    clear=True,
+                ),
+                mock.patch.object(shutil, "which", return_value="/usr/bin/tool"),
+            ):
+                environment = android_build_environment()
+
+        self.assertEqual(environment["SDK"], str(sdk))
+        self.assertEqual(environment["ANDROID_SDK_ROOT"], str(sdk))
+        self.assertEqual(environment["NDK"], str(ndk))
+        self.assertEqual(environment["BUILD_TOOLS"], str(build_tools))
+
+    def test_missing_sdk_fails_with_configuration_help(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            sdk = pathlib.Path(temporary) / "missing-sdk"
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"ANDROID_SDK_ROOT": str(sdk)},
+                    clear=True,
+                ),
+                mock.patch.object(shutil, "which", return_value="/usr/bin/tool"),
+            ):
+                with self.assertRaisesRegex(
+                    ProvisionError,
+                    "no Portal changes were made.*ANDROID_SDK_ROOT",
+                ):
+                    android_build_environment()
 
 class AdbAuthorizationTimeoutCliTest(unittest.TestCase):
     def test_standalone_flag_needs_no_root_action(self) -> None:
@@ -158,6 +219,86 @@ class AdbAuthorizationTimeoutCliTest(unittest.TestCase):
             arguments = parse_args()
 
         self.assertTrue(arguments.disable_adb_auth_timeout)
+
+
+class KioskHomeResumeTest(unittest.TestCase):
+    def test_existing_device_owner_is_restored_as_home_before_bootstraps(
+        self,
+    ) -> None:
+        def adb_run(
+            arguments: list[str],
+            timeout: float | None = None,
+            check: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout, check
+            if arguments[1:4] == ["pm", "path", "me.jxl.kiosk_satellite"]:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    "package:/data/app/me.jxl.kiosk_satellite/base.apk\n",
+                )
+            if arguments[1:3] == ["dumpsys", "device_policy"]:
+                return subprocess.CompletedProcess(
+                    arguments,
+                    0,
+                    "Device Owner:\n"
+                    "  admin=ComponentInfo{"
+                    "me.jxl.kiosk_satellite/"
+                    "me.jxl.kiosk_satellite.KioskAdminReceiver}\n",
+                )
+            raise AssertionError(arguments)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                device_owner=True,
+                kiosk_home=True,
+            )
+            with (
+                mock.patch.object(provisioner, "adb_run", side_effect=adb_run),
+                mock.patch.object(provisioner, "ensure_kiosk_home") as ensure,
+            ):
+                restored = (
+                    provisioner.restore_existing_kiosk_home_before_bootstraps()
+                )
+
+        self.assertTrue(restored)
+        ensure.assert_called_once_with()
+
+    def test_unowned_install_is_not_changed_before_bootstraps(self) -> None:
+        def adb_run(
+            arguments: list[str],
+            timeout: float | None = None,
+            check: bool = False,
+        ) -> subprocess.CompletedProcess[str]:
+            del timeout, check
+            output = (
+                "package:/data/app/me.jxl.kiosk_satellite/base.apk\n"
+                if arguments[1:3] == ["pm", "path"]
+                else "Device Owner: none\n"
+            )
+            return subprocess.CompletedProcess(arguments, 0, output)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                device_owner=True,
+                kiosk_home=True,
+            )
+            with (
+                mock.patch.object(provisioner, "adb_run", side_effect=adb_run),
+                mock.patch.object(provisioner, "ensure_kiosk_home") as ensure,
+            ):
+                restored = (
+                    provisioner.restore_existing_kiosk_home_before_bootstraps()
+                )
+
+        self.assertFalse(restored)
+        ensure.assert_not_called()
 
 
 class ShizukuCliTest(unittest.TestCase):

@@ -34,6 +34,9 @@ from portal_targets import PortalTarget, find_target
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROJECT_URL = "https://github.com/jxlarrea/portal-root-kiosk-satellite"
+ANDROID_NDK_VERSION = "28.2.13676358"
+ANDROID_BUILD_TOOLS_VERSION = "37.0.0"
+ANDROID_PLATFORM_VERSION = "android-36"
 PROVISIONER_BANNER = rf"""
 +----------------------------------------------------------------+
 |                                                                |
@@ -3161,6 +3164,10 @@ class PortalProvisioner:
                 value = os.environ.get(name)
                 if value:
                     roots.append(pathlib.Path(value))
+            for name in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
+                value = os.environ.get(name)
+                if value:
+                    roots.append(pathlib.Path(value) / "ndk")
             roots.extend(
                 (
                     pathlib.Path.home() / "android-sdk/ndk",
@@ -4388,6 +4395,30 @@ class PortalProvisioner:
             )
             self.configure_kiosk_home(enabled=True)
         self.verify_kiosk_home(enabled=True)
+
+    def restore_existing_kiosk_home_before_bootstraps(self) -> bool:
+        """Restore an already provisioned kiosk before more root attempts."""
+        if not (self.kiosk_home and self.device_owner):
+            return False
+        installed = self.adb_run(
+            ["shell", "pm", "path", KIOSK_PACKAGE], timeout=10
+        )
+        if installed.returncode != 0 or "package:" not in installed.stdout:
+            return False
+        policy = self.adb_run(
+            ["shell", "dumpsys", "device_policy"], timeout=15, check=True
+        ).stdout
+        is_owner = "Device Owner:" in policy and any(
+            component in policy for component in KIOSK_OWNER_COMPONENTS
+        )
+        if not is_owner:
+            return False
+        print(
+            "KIOSK_HOME_EARLY_RESTORE reason=resume-privileged-bootstrap",
+            flush=True,
+        )
+        self.ensure_kiosk_home()
+        return True
 
     def disable_ota_packages(self) -> None:
         packages = (
@@ -5819,6 +5850,8 @@ class PortalProvisioner:
                 self.create_backup_bundle(self.backup_path)
             return
         self.verify_target()
+        if self.privileged_requested() and not self.skip_build:
+            android_build_environment(self.target)
         # Resolve host-side downloads before any exploit bootstrap can reboot the
         # Portal. This turns a missing host network connection into an immediate,
         # actionable error instead of a late failure after several phases.
@@ -5938,6 +5971,7 @@ class PortalProvisioner:
                 f"property={persistent_property}",
                 flush=True,
             )
+        self.restore_existing_kiosk_home_before_bootstraps()
         self.audio_already_configured = (
             self.audio_preflight() if self.audio else False
         )
@@ -6570,6 +6604,112 @@ class PortalProvisioner:
         raise ProvisionError(f"provisioning failed after {self.attempts} attempts")
 
 
+def android_build_environment(
+    target: PortalTarget | None = None,
+) -> dict[str, str]:
+    """Resolve and validate the per-user Android toolchain."""
+    environment = dict(os.environ)
+
+    sdk_value = environment.get("ANDROID_SDK_ROOT") or environment.get(
+        "ANDROID_HOME"
+    )
+    if sdk_value:
+        sdk = pathlib.Path(sdk_value).expanduser()
+    else:
+        sdk_candidates = (
+            pathlib.Path.home() / "Android/Sdk",
+            pathlib.Path.home() / "Android/sdk",
+            pathlib.Path.home() / "android-sdk",
+        )
+        sdk = next(
+            (candidate for candidate in sdk_candidates if candidate.is_dir()),
+            sdk_candidates[0],
+        )
+
+    ndk_value = next(
+        (
+            environment[name]
+            for name in ("NDK", "ANDROID_NDK_HOME", "ANDROID_NDK_ROOT")
+            if environment.get(name)
+        ),
+        None,
+    )
+    ndk = (
+        pathlib.Path(ndk_value).expanduser()
+        if ndk_value
+        else sdk / "ndk" / ANDROID_NDK_VERSION
+    )
+    build_tools = pathlib.Path(
+        environment.get(
+            "BUILD_TOOLS",
+            str(sdk / "build-tools" / ANDROID_BUILD_TOOLS_VERSION),
+        )
+    ).expanduser()
+    android_jar = pathlib.Path(
+        environment.get(
+            "ANDROID_JAR",
+            str(sdk / "platforms" / ANDROID_PLATFORM_VERSION / "android.jar"),
+        )
+    ).expanduser()
+    d8 = pathlib.Path(environment.get("D8", str(build_tools / "d8"))).expanduser()
+    toolchain_bin = ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+    required_paths = {
+        "Android NDK arm64 compiler": (
+            toolchain_bin / "aarch64-linux-android29-clang"
+        ),
+        "Android NDK ARM compiler (API 28)": (
+            toolchain_bin / "armv7a-linux-androideabi28-clang"
+        ),
+        "Android NDK ARM compiler (API 29)": (
+            toolchain_bin / "armv7a-linux-androideabi29-clang"
+        ),
+        "Android SDK Platform 36": android_jar,
+        "Android Build Tools aapt": build_tools / "aapt",
+        "Android Build Tools apksigner": build_tools / "apksigner",
+        "Android Build Tools zipalign": build_tools / "zipalign",
+        "Android Build Tools d8": d8,
+    }
+    if target and target.bundled_simpleperf:
+        required_paths["Android NDK arm64 simpleperf"] = (
+            ndk / "simpleperf/bin/android/arm64/simpleperf"
+        )
+    missing_paths = [
+        f"{label}: {path}"
+        for label, path in required_paths.items()
+        if not path.is_file()
+    ]
+    missing_commands = [
+        command
+        for command in ("make", "javac", "jar", "keytool")
+        if shutil.which(command) is None
+    ]
+    if missing_paths or missing_commands:
+        details = missing_paths + [
+            f"host command not found in PATH: {command}"
+            for command in missing_commands
+        ]
+        raise ProvisionError(
+            "Android build environment is incomplete; no Portal changes were "
+            "made. Install the host requirements or set ANDROID_SDK_ROOT, NDK, "
+            "ANDROID_JAR and BUILD_TOOLS as documented:\n- "
+            + "\n- ".join(details)
+        )
+
+    environment.update(
+        {
+            "SDK": str(sdk),
+            "ANDROID_SDK_ROOT": str(sdk),
+            "NDK": str(ndk),
+            "ANDROID_NDK_HOME": str(ndk),
+            "BUILD_TOOLS": str(build_tools),
+            "ANDROID_JAR": str(android_jar),
+            "D8": str(d8),
+        }
+    )
+    return environment
+
+
 def build(
     target: PortalTarget | None,
     build_audio: bool,
@@ -6582,6 +6722,7 @@ def build(
 ) -> None:
     if target is None:
         raise ProvisionError("target must be selected before building")
+    environment = android_build_environment(target)
     commands = [
         ["make", "-C", str(ROOT / "exploit"), "-j2", target.make_target]
     ]
@@ -6623,7 +6764,9 @@ def build(
     if build_sentinel:
         commands.append(["make", "-C", str(ROOT / "exploit-sentinel"), "all"])
     for command in commands:
-        result = subprocess.run(command, cwd=ROOT, check=False)
+        result = subprocess.run(
+            command, cwd=ROOT, env=environment, check=False
+        )
         if result.returncode != 0:
             raise ProvisionError(f"build failed: {shlex.join(command)}")
 
