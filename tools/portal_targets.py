@@ -16,6 +16,7 @@ class PortalTarget:
     preload_name: str
     make_target: str
     kaslr_pc_offsets: tuple[int, ...]
+    debloat_component_profile: str
     product_models: tuple[str, ...] = ()
     stack_route: str = "sendmmsg"
     memstart_strategy: str = "bugreport"
@@ -24,7 +25,9 @@ class PortalTarget:
     proc_uid_sentinel: str = "run_as"
     kgsl_reclaim: bool = False
     kgsl_reclaim_allocations: int = 4096
+    kgsl_reclaim_retry_allocations: int = 0
     mm_recycle_slabs: int = 0
+    mm_recycle_retry_slabs: int = 0
     kiosk_permission_settle_seconds: int = 0
     reclaim_pairs: int = 64
     reclaim_sends: int = 64
@@ -88,6 +91,7 @@ TARGETS = (
             0x136E,
             0x3A72,
         ),
+        debloat_component_profile="full",
     ),
     PortalTarget(
         key="portal-plus-cipher-4051355900018050",
@@ -111,6 +115,7 @@ TARGETS = (
             0x136E,
             0x3A72,
         ),
+        debloat_component_profile="full",
         product_models=("Portal+",),
         reclaim_pairs=256,
         reclaim_sends=256,
@@ -141,6 +146,7 @@ TARGETS = (
             0x136E,
             0x3A72,
         ),
+        debloat_component_profile="full",
         product_models=("Portal",),
         reclaim_pairs=256,
         reclaim_sends=256,
@@ -178,6 +184,7 @@ TARGETS = (
             0x136E,
             0x3A72,
         ),
+        debloat_component_profile="full",
         product_models=("PortalMini",),
         reclaim_pairs=256,
         reclaim_sends=256,
@@ -205,6 +212,7 @@ TARGETS = (
         preload_name="preload-portal-aloha-1041515800015050.so",
         make_target="portal-aloha-1041515800015050",
         kaslr_pc_offsets=(0x3354,),
+        debloat_component_profile="portal-plus-aloha-safe-v1",
         product_models=("Portal+",),
         stack_route="ptrace",
         bundled_simpleperf=True,
@@ -212,7 +220,9 @@ TARGETS = (
         proc_uid_sentinel="app",
         kgsl_reclaim=True,
         kgsl_reclaim_allocations=8192,
+        kgsl_reclaim_retry_allocations=4096,
         mm_recycle_slabs=40,
+        mm_recycle_retry_slabs=20,
         reclaim_pairs=256,
         reclaim_sends=256,
         uid1000_host_package="com.facebook.alohasdk.virtualcameramanager",
@@ -253,6 +263,7 @@ TARGETS = (
         preload_name="preload-portal-aloha-1041515800015050.so",
         make_target="portal-aloha-1041515800015050",
         kaslr_pc_offsets=(0x3354,),
+        debloat_component_profile="full",
         product_models=("Portal",),
         stack_route="ptrace",
         bundled_simpleperf=True,

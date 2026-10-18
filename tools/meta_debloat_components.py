@@ -206,3 +206,58 @@ DEBLOAT_COMPONENTS = (
 )
 
 DEBLOAT_COMPONENT_NAMES = tuple(component for _, component in DEBLOAT_COMPONENTS)
+
+# This is the component set that was exercised across two successful reboots on
+# the first-generation Portal+ Aloha firmware.  Keep it explicit: Android's
+# PackageManager accepts enabled-state overrides for component names that are
+# not declared by the installed APK, so package presence alone cannot safely
+# select a cross-model component inventory.
+PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES = (
+    'com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver',
+    'com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService',
+    'com.facebook.aloha.system.device/com.facebook.analytics.appstatelogger.AppStateIntentService',
+    'com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService',
+    'com.facebook.aloha.system.device/com.facebook.analytics2.logger.service.LollipopUploadSafeService',
+    'com.facebook.aloha.system.device/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService',
+    'com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerServiceReceiver',
+    'com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver',
+    'com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver',
+    'com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerService',
+    'com.facebook.alohaapps.settings/com.facebook.reportaproblem.base.bugreport.BugReportUploadService',
+    'com.facebook.alohaapps.settings/com.facebook.analytics.appstatelogger.AppStateIntentService',
+    'com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerService',
+    'com.facebook.alohaapps.settings/com.facebook.conditionalworker.LollipopConditionalWorkerService',
+    'com.facebook.alohaapps.settings/com.facebook.analytics2.logger.service.LollipopUploadSafeService',
+    'com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService',
+    'com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService',
+    'com.facebook.alohaapps.settings/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService',
+    'com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerServiceReceiver',
+    'com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.HighPriUploadRetryReceiver',
+    'com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver',
+    'com.facebook.portal.aiservice/com.facebook.analytics.appstatelogger.AppStateIntentService',
+    'com.facebook.portal.aiservice/com.facebook.reportaproblem.base.bugreport.BugReportUploadService',
+    'com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerService',
+    'com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerService',
+    'com.facebook.portal.aiservice/com.facebook.analytics2.logger.service.LollipopUploadSafeService',
+    'com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.Analytics2UploadService',
+    'com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.LollipopUploadService',
+    'com.facebook.portal.aiservice/com.facebook.conditionalworker.LollipopConditionalWorkerService',
+    'com.facebook.portal.aiservice/com.facebook.analytics2.logger.legacy.uploader.AlarmBasedUploadService',
+    'com.facebook.aloha.system.device/androidx.work.impl.diagnostics.DiagnosticsReceiver',
+    'com.facebook.alohaapps.settings/androidx.work.impl.diagnostics.DiagnosticsReceiver',
+    'com.facebook.portal.aiservice/androidx.work.impl.diagnostics.DiagnosticsReceiver',
+    'com.facebook.aloha.system.device/com.google.firebase.iid.FirebaseInstanceIdReceiver',
+    'com.facebook.aloha.system.device/com.google.firebase.components.ComponentDiscoveryService',
+    'com.facebook.aloha.system.device/com.google.firebase.messaging.FirebaseMessagingService',
+    'com.facebook.aloha.system.device/com.google.firebase.provider.FirebaseInitProvider',
+    'com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationBootReceiver',
+    'com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService',
+)
+
+DEBLOAT_COMPONENT_PROFILES = {
+    'full': DEBLOAT_COMPONENT_NAMES,
+    'portal-plus-aloha-safe-v1': PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES,
+}
+
+if not set(PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES) <= set(DEBLOAT_COMPONENT_NAMES):
+    raise RuntimeError('Portal+ Aloha debloat profile contains an unknown component')

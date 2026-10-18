@@ -28,7 +28,11 @@ if sys.version_info < (3, 9):
         f"running {sys.version_info.major}.{sys.version_info.minor}"
     )
 
-from meta_debloat_components import DEBLOAT_COMPONENTS, DEBLOAT_COMPONENT_NAMES
+from meta_debloat_components import (
+    DEBLOAT_COMPONENT_PROFILES,
+    DEBLOAT_COMPONENTS,
+    DEBLOAT_COMPONENT_NAMES,
+)
 from portal_targets import PortalTarget, find_target
 
 
@@ -345,6 +349,29 @@ class PortalProvisioner:
             else "/data/portal-uid1000"
         )
         return f"{directory}/{name}"
+
+    def debloat_component_names(self) -> tuple[str, ...]:
+        profile = self.target.debloat_component_profile if self.target else "full"
+        try:
+            return DEBLOAT_COMPONENT_PROFILES[profile]
+        except KeyError as exc:
+            raise ProvisionError(
+                f"unknown debloat component profile for this target: {profile}"
+            ) from exc
+
+    def unexpected_disabled_debloat_components(
+        self,
+        saved: dict[str, tuple[str, str]],
+        current: dict[str, tuple[str, str]],
+    ) -> list[str]:
+        target_components = set(self.debloat_component_names())
+        return sorted(
+            component
+            for component, (_, original) in saved.items()
+            if component not in target_components
+            and original in {"default", "enabled"}
+            and current[component][1] == "disabled"
+        )
 
     def uid1000_helper_local(self) -> pathlib.Path:
         artifact = (
@@ -977,10 +1004,19 @@ class PortalProvisioner:
         component_states = (
             self.current_component_states() if component_backup is not None else {}
         )
+        target_component_names = self.debloat_component_names()
+        unexpected_disabled_components = (
+            self.unexpected_disabled_debloat_components(
+                component_backup, component_states
+            )
+            if component_backup is not None
+            else []
+        )
         component_disabled = sum(
             1
-            for component, (_, state) in component_states.items()
-            if state == "disabled"
+            for component in target_component_names
+            if component in component_states
+            and component_states[component][1] == "disabled"
             and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
         )
         remote_wipe_backup = self.read_remote_wipe_backup(required=False)
@@ -1151,7 +1187,14 @@ class PortalProvisioner:
             "debloat": {
                 "disabled": sorted(set(DEBLOAT_PACKAGES) & disabled),
                 "components_disabled": component_disabled,
-                "components_targeted": len(DEBLOAT_COMPONENT_NAMES),
+                "component_profile": (
+                    target.debloat_component_profile if target else "full"
+                ),
+                "components_targeted": len(target_component_names),
+                "unexpected_components_disabled": len(
+                    unexpected_disabled_components
+                ),
+                "requires_restore": bool(unexpected_disabled_components),
                 "components_retained_self_managed": sorted(
                     SELF_MANAGED_DEBLOAT_COMPONENTS
                 ),
@@ -1161,22 +1204,24 @@ class PortalProvisioner:
                     for package in DEBLOAT_PACKAGES
                 ),
                 "component_profile_complete": component_backup is not None
+                and not unexpected_disabled_components
                 and all(
-                    original == "absent"
+                    component_backup[component][1] == "absent"
                     or component in SELF_MANAGED_DEBLOAT_COMPONENTS
                     or component_states[component][1] == "disabled"
-                    for component, (_, original) in component_backup.items()
+                    for component in target_component_names
                 ),
                 "complete": all(
                     package not in installed or package in disabled
                     for package in DEBLOAT_PACKAGES
                 )
                 and component_backup is not None
+                and not unexpected_disabled_components
                 and all(
-                    original == "absent"
+                    component_backup[component][1] == "absent"
                     or component in SELF_MANAGED_DEBLOAT_COMPONENTS
                     or component_states[component][1] == "disabled"
-                    for component, (_, original) in component_backup.items()
+                    for component in target_component_names
                 ),
             },
             "remote_wipe": {
@@ -3070,11 +3115,21 @@ class PortalProvisioner:
         components_complete = False
         if saved is not None:
             current = self.current_component_states()
+            unexpected = self.unexpected_disabled_debloat_components(
+                saved, current
+            )
+            if unexpected:
+                raise ProvisionError(
+                    "this target has disabled components outside its validated "
+                    "profile; restore the saved component states with "
+                    "--restore-bloat before provisioning again "
+                    f"(unexpected={len(unexpected)})"
+                )
             components_complete = all(
-                original == "absent"
+                saved[component][1] == "absent"
                 or component in SELF_MANAGED_DEBLOAT_COMPONENTS
                 or current[component][1] == "disabled"
-                for component, (_, original) in saved.items()
+                for component in self.debloat_component_names()
             )
         complete = packages_complete and components_complete
         print(
@@ -3518,6 +3573,27 @@ class PortalProvisioner:
         if self.target is None:
             raise ProvisionError("target must be selected before exploitation")
         stack_route = self.target.stack_route
+        retry_geometry = (
+            attempt % 2 == 0
+            and self.target.kgsl_reclaim_retry_allocations > 0
+        )
+        kgsl_reclaim_allocations = (
+            self.target.kgsl_reclaim_retry_allocations
+            if retry_geometry
+            else self.target.kgsl_reclaim_allocations
+        )
+        mm_recycle_slabs = (
+            self.target.mm_recycle_retry_slabs
+            if retry_geometry and self.target.mm_recycle_retry_slabs > 0
+            else self.target.mm_recycle_slabs
+        )
+        if retry_geometry:
+            print(
+                "EXPLOIT_RETRY_GEOMETRY "
+                f"attempt={attempt} kgsl_reclaim={kgsl_reclaim_allocations} "
+                f"mm_recycle_slabs={mm_recycle_slabs}",
+                flush=True,
+            )
         environment = {
             "GHOSTLOCK_KASLR_BASE": hex(base),
             "GHOSTLOCK_P0_MEMSTART": hex(memstart),
@@ -3549,15 +3625,15 @@ class PortalProvisioner:
                     "GHOSTLOCK_KGSL_WATCH": "1",
                     "GHOSTLOCK_KGSL_HOLD": "1024",
                     "GHOSTLOCK_KGSL_RECLAIM": str(
-                        self.target.kgsl_reclaim_allocations
+                        kgsl_reclaim_allocations
                     ),
                     "GHOSTLOCK_KGSL_RECLAIM_EARLY": "512",
                     "GHOSTLOCK_FOPS_TILE_TABLES": "1",
                 }
             )
-        if self.target.mm_recycle_slabs:
+        if mm_recycle_slabs:
             environment["GHOSTLOCK_MM_RECYCLE_SLABS"] = str(
-                self.target.mm_recycle_slabs
+                mm_recycle_slabs
             )
         if self.target.proc_uid_sentinel in ("run_as", "app"):
             environment["GHOSTLOCK_PROC_UID_APP_SENTINEL"] = "1"
@@ -4984,7 +5060,12 @@ class PortalProvisioner:
                 else:
                     print("DEBLOAT_COMPONENT_RESTORE legacy_backup=absent actions=0")
             if states is not None:
-                for component in DEBLOAT_COMPONENT_NAMES:
+                action_components = (
+                    self.debloat_component_names()
+                    if self.debloat
+                    else DEBLOAT_COMPONENT_NAMES
+                )
+                for component in action_components:
                     _, state = states[component]
                     if state == "absent":
                         continue
@@ -5161,10 +5242,11 @@ class PortalProvisioner:
             saved = self.read_component_backup(required=True)
             assert saved is not None
             current = self.current_component_states()
+            target_components = self.debloat_component_names()
             component_mismatches = [
                 component
-                for component, (_, original) in saved.items()
-                if original != "absent"
+                for component in target_components
+                if saved[component][1] != "absent"
                 and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
                 and current[component][1] != "disabled"
             ]
@@ -5173,7 +5255,8 @@ class PortalProvisioner:
                     "Meta cloud components became enabled: "
                     + ", ".join(component_mismatches)
                 )
-            for component, (category, original) in saved.items():
+            for component in target_components:
+                category, original = saved[component]
                 if (
                     original != "absent"
                     and component not in SELF_MANAGED_DEBLOAT_COMPONENTS
@@ -5193,7 +5276,15 @@ class PortalProvisioner:
                 "com.facebook.alohasdk.pushnotification.PushNotificationService",
                 "com.facebook.aloha.system.services.bugreporter.PillViewService",
             )
-            active = [name for name in forbidden if name in running]
+            active = [
+                name
+                for name in forbidden
+                if any(
+                    component.endswith("/" + name)
+                    for component in target_components
+                )
+                and name in running
+            ]
             if active:
                 raise ProvisionError(
                     "disabled Meta cloud services are still running: "

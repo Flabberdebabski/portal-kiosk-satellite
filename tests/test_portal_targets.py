@@ -78,6 +78,12 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertTrue(aloha.uid1000_installer_credentials)
         self.assertTrue(aloha.meta_accounts_skip_force_stop)
         self.assertTrue(aloha.meta_accounts_package_bootstrap)
+        self.assertEqual(
+            aloha.debloat_component_profile, "portal-plus-aloha-safe-v1"
+        )
+        self.assertEqual(terry.debloat_component_profile, "full")
+        self.assertEqual(cipher.debloat_component_profile, "full")
+        self.assertEqual(omni.debloat_component_profile, "full")
 
         self.assertEqual(cipher.key, "portal-plus-cipher-4051355900018050")
         self.assertEqual(cipher.stack_route, "sendmmsg")
@@ -165,8 +171,17 @@ class PortalTargetSelectionTest(unittest.TestCase):
         self.assertTrue(portal.meta_accounts_package_bootstrap)
         self.assertEqual(portal.kgsl_reclaim_allocations, 8192)
         self.assertEqual(portal_plus.kgsl_reclaim_allocations, 8192)
+        self.assertEqual(portal.kgsl_reclaim_retry_allocations, 0)
+        self.assertEqual(portal_plus.kgsl_reclaim_retry_allocations, 4096)
         self.assertEqual(portal.mm_recycle_slabs, 40)
         self.assertEqual(portal_plus.mm_recycle_slabs, 40)
+        self.assertEqual(portal.mm_recycle_retry_slabs, 0)
+        self.assertEqual(portal_plus.mm_recycle_retry_slabs, 20)
+        self.assertEqual(portal.debloat_component_profile, "full")
+        self.assertEqual(
+            portal_plus.debloat_component_profile,
+            "portal-plus-aloha-safe-v1",
+        )
         self.assertEqual(portal.kiosk_permission_settle_seconds, 30)
         self.assertEqual(portal_plus.kiosk_permission_settle_seconds, 0)
 

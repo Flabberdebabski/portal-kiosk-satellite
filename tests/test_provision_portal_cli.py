@@ -22,6 +22,11 @@ from provision_portal import (  # noqa: E402
     android_build_environment,
     parse_args,
 )
+from meta_debloat_components import (  # noqa: E402
+    DEBLOAT_COMPONENT_NAMES,
+    PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES,
+)
+from portal_targets import TARGETS  # noqa: E402
 
 
 class PersistentWirelessAdbCliTest(unittest.TestCase):
@@ -329,6 +334,118 @@ class ShizukuCliTest(unittest.TestCase):
 
 
 class RemoteWipeCliTest(unittest.TestCase):
+    def test_portal_plus_aloha_debloat_uses_only_validated_components(self) -> None:
+        target = next(
+            target
+            for target in TARGETS
+            if target.key == "portal-plus-aloha-1041515800015050"
+        )
+        states = {
+            component: ("test", "default")
+            for component in DEBLOAT_COMPONENT_NAMES
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                debloat=True,
+            )
+            provisioner.target = target
+            captured: list[str] = []
+            with (
+                mock.patch.object(
+                    provisioner, "read_component_backup", return_value=states
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "push_text_atomic",
+                    side_effect=lambda contents, remote: captured.append(contents),
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "adb_run",
+                    return_value=subprocess.CompletedProcess([], 1, ""),
+                ),
+            ):
+                provisioner.prepare_component_actions()
+
+        action_lines = captured[0].splitlines()[1:]
+        self.assertEqual(len(action_lines), 39)
+        self.assertEqual(
+            action_lines,
+            [
+                f"disable\t{component}"
+                for component in PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES
+            ],
+        )
+
+    def test_portal_plus_restore_still_undoes_every_saved_component(self) -> None:
+        target = next(
+            target
+            for target in TARGETS
+            if target.key == "portal-plus-aloha-1041515800015050"
+        )
+        states = {
+            component: ("test", "default")
+            for component in DEBLOAT_COMPONENT_NAMES
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555",
+                1,
+                pathlib.Path(temporary),
+                restore_bloat=True,
+            )
+            provisioner.target = target
+            captured: list[str] = []
+            with (
+                mock.patch.object(
+                    provisioner, "read_component_backup", return_value=states
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "push_text_atomic",
+                    side_effect=lambda contents, remote: captured.append(contents),
+                ),
+                mock.patch.object(
+                    provisioner,
+                    "adb_run",
+                    return_value=subprocess.CompletedProcess([], 0, ""),
+                ),
+            ):
+                provisioner.prepare_component_actions()
+
+        self.assertEqual(len(captured[0].splitlines()[1:]), len(DEBLOAT_COMPONENT_NAMES))
+
+    def test_portal_plus_detects_cross_model_component_overrides(self) -> None:
+        target = next(
+            target
+            for target in TARGETS
+            if target.key == "portal-plus-aloha-1041515800015050"
+        )
+        outside_profile = next(
+            component
+            for component in DEBLOAT_COMPONENT_NAMES
+            if component not in PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES
+        )
+        saved = {
+            component: ("test", "default")
+            for component in DEBLOAT_COMPONENT_NAMES
+        }
+        current = dict(saved)
+        current[outside_profile] = ("test", "disabled")
+        with tempfile.TemporaryDirectory() as temporary:
+            provisioner = PortalProvisioner(
+                "192.0.2.1:5555", 1, pathlib.Path(temporary)
+            )
+            provisioner.target = target
+
+            self.assertEqual(
+                provisioner.unexpected_disabled_debloat_components(saved, current),
+                [outside_profile],
+            )
+
     def test_combined_component_actions_are_a_single_bootstrap_phase(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             provisioner = PortalProvisioner(
