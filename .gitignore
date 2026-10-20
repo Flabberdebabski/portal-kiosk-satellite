@@ -9,7 +9,7 @@ presence-helper/build/*
 uid1000-helper/build/*
 !uid1000-helper/build/.gitkeep
 exploit-sentinel/build/*
-exploit/portal-terry-*
+exploit/portal-*
 *.o
 *.so
 

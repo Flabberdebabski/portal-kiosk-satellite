@@ -254,10 +254,33 @@ PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES = (
     'com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService',
 )
 
+# Portal TV declares a smaller component inventory than the touchscreen Portal
+# builds.  This exact set is intentionally conservative and contains only
+# components confirmed present on Ripley plus already exercised on Aloha.
+PORTAL_TV_RIPLEY_SAFE_COMPONENT_NAMES = (
+    'com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerServiceReceiver',
+    'com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver',
+    'com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerService',
+    'com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerService',
+    'com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerServiceReceiver',
+    'com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver',
+    'com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerService',
+    'com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerService',
+    'com.facebook.aloha.system.device/androidx.work.impl.diagnostics.DiagnosticsReceiver',
+    'com.facebook.alohaapps.settings/androidx.work.impl.diagnostics.DiagnosticsReceiver',
+    'com.facebook.portal.aiservice/androidx.work.impl.diagnostics.DiagnosticsReceiver',
+    'com.facebook.aloha.system.device/com.google.firebase.iid.FirebaseInstanceIdReceiver',
+    'com.facebook.aloha.system.device/com.google.firebase.messaging.FirebaseMessagingService',
+    'com.facebook.aloha.system.device/com.google.firebase.provider.FirebaseInitProvider',
+)
+
 DEBLOAT_COMPONENT_PROFILES = {
     'full': DEBLOAT_COMPONENT_NAMES,
     'portal-plus-aloha-safe-v1': PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES,
+    'portal-tv-ripley-safe-v1': PORTAL_TV_RIPLEY_SAFE_COMPONENT_NAMES,
 }
 
 if not set(PORTAL_PLUS_ALOHA_SAFE_COMPONENT_NAMES) <= set(DEBLOAT_COMPONENT_NAMES):
     raise RuntimeError('Portal+ Aloha debloat profile contains an unknown component')
+if not set(PORTAL_TV_RIPLEY_SAFE_COMPONENT_NAMES) <= set(DEBLOAT_COMPONENT_NAMES):
+    raise RuntimeError('Portal TV Ripley debloat profile contains an unknown component')

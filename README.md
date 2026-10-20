@@ -94,6 +94,10 @@ needs to remain in view during the reboot sequence.
 | Meta Portal+ (2nd generation) | `cipher` | 10 | `Facebook/cipher_prod/cipher:10/QKQ1.210213.001/4051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 | Meta Portal 10-inch (2nd generation) | `omni` | 10 | `Facebook/omni_prod/omni:10/QKQ1.210213.001/3051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 | Meta Portal Mini | `omni` | 10 | `Facebook/omni_prod/omni:10/QKQ1.210213.001/3051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
+| Meta Portal TV | `ripley` | 9 | `Facebook/ripley_prod/ripley:9/PKQ1.191202.001/2041515800015050:user/prod-keys` | `4.4.153+` | Tested |
+
+Thank you to @protocol113 for providing Portal TV access and sharing the
+exploit timing observations that helped validate `ripley` support.
 
 Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
@@ -102,17 +106,9 @@ factor. The original 10-inch Portal and 15.6-inch Portal+ share their firmware
 and kernel port, but the provisioner keeps separate exact product-model guards
 for `Portal` and `Portal+`.
 
-## Possible supported devices
-
-These models are candidates for future ports based on Meta's published kernel
-sources and archived firmware. They are **not supported by the current build**.
-
-| Model | Family | Android | Porting outlook |
-| --- | --- | --- | --- |
-| Meta Portal TV | `ripley` | 9 | Possible with a Linux 4.4 and TV-specific port. |
-
-To request support, open an issue with the retail model and this output. Do
-not publish an ADB address, pairing code or account information.
+Other firmware builds still need their own verified target. To request support,
+open an issue with the retail model and this output. Do not publish an ADB
+address, pairing code or account information.
 
 ```sh
 adb shell getprop ro.product.model
@@ -511,6 +507,7 @@ below: 196 are disabled on the tested Portal Go, Portal Mini,
 second-generation Portal 10-inch and second-generation Portal+ firmware, and
 194 are disabled on the original first-generation Portal. The tested
 first-generation Portal+ has a smaller installed package set and disables 39.
+Portal TV uses its own conservative 14-component profile.
 Component-level targeting removes unused
 work without disabling the camera, audio, presence, media, app-management,
 identity, launcher, or WebView packages that the Portal and Kiosk Satellite
@@ -815,6 +812,39 @@ On firmware `1041515800015050`, the provisioner disables 39 components.
 
 - `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationBootReceiver`
 - `com.facebook.alohasdk.pushnotification/com.facebook.alohasdk.pushnotification.PushNotificationService`
+
+</details>
+<p></p>
+<details>
+<summary>Meta Portal TV: 14 disabled components</summary>
+<p></p>
+
+On firmware `2041515800015050`, the provisioner disables only the following
+components confirmed present on Portal TV. Its smaller application inventory
+does not use the broader touchscreen Portal profile.
+
+**Background workers (8)**
+
+- `com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.alohaapps.settings/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.alohaapps.settings/com.facebook.conditionalworker.ConditionalWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerServiceReceiver`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerServiceReceiver`
+- `com.facebook.portal.aiservice/com.facebook.delayedworker.DelayedWorkerService`
+- `com.facebook.portal.aiservice/com.facebook.conditionalworker.ConditionalWorkerService`
+
+**Diagnostics (3)**
+
+- `com.facebook.aloha.system.device/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.alohaapps.settings/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+- `com.facebook.portal.aiservice/androidx.work.impl.diagnostics.DiagnosticsReceiver`
+
+**Firebase (3)**
+
+- `com.facebook.aloha.system.device/com.google.firebase.iid.FirebaseInstanceIdReceiver`
+- `com.facebook.aloha.system.device/com.google.firebase.messaging.FirebaseMessagingService`
+- `com.facebook.aloha.system.device/com.google.firebase.provider.FirebaseInitProvider`
 
 </details>
 <p></p>

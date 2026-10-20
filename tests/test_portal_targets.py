@@ -13,7 +13,7 @@ from portal_targets import TARGETS, find_target  # noqa: E402
 
 class PortalTargetSelectionTest(unittest.TestCase):
     def test_every_supported_build_selects_only_its_exact_target(self) -> None:
-        self.assertEqual(len(TARGETS), 6)
+        self.assertEqual(len(TARGETS), 7)
         for target in TARGETS:
             selected = find_target(
                 target.device,
@@ -244,6 +244,56 @@ class PortalTargetSelectionTest(unittest.TestCase):
                 self.assertIsNone(
                     find_target(target.device, target.fingerprint, "Portal Go")
                 )
+
+    def test_portal_tv_uses_an_exact_isolated_target(self) -> None:
+        targets = {target.key: target for target in TARGETS}
+        ripley = targets["portal-tv-ripley-2041515800015050"]
+        self.assertIs(
+            find_target(ripley.device, ripley.fingerprint, "PortalTV"), ripley
+        )
+        self.assertIsNone(
+            find_target(ripley.device, ripley.fingerprint, "Portal")
+        )
+        self.assertEqual(ripley.kaslr_strategy, "bugreport")
+        self.assertEqual(ripley.proc_uid_sentinel, "user")
+        self.assertEqual(ripley.proc_uid_user_ids, (10, 11, 12))
+        self.assertFalse(ripley.break_owner_chain)
+        self.assertEqual(ripley.post_boot_adb_settle_seconds, 5)
+        self.assertTrue(ripley.audio_java_fallback)
+        self.assertTrue(ripley.audio_installer_credentials)
+        self.assertTrue(ripley.device_owner_system_credentials)
+        self.assertTrue(ripley.uid1000_embedded_helper)
+        self.assertTrue(ripley.uid1000_installer_credentials)
+        self.assertEqual(ripley.uid1000_helper_make_target, "aloha")
+        self.assertEqual(
+            ripley.ota_credential_process,
+            "com.facebook.alohaservices.alohausers",
+        )
+        self.assertEqual(ripley.presence_full_sensor_width, 4032.0)
+        self.assertEqual(
+            ripley.debloat_component_profile, "portal-tv-ripley-safe-v1"
+        )
+        self.assertEqual(
+            ripley.exploit_env.get("GHOSTLOCK_SENTINEL_EARLY"), "1"
+        )
+        self.assertEqual(
+            ripley.exploit_env.get("GHOSTLOCK_SENTINEL_CYCLE_EARLY"), "1"
+        )
+        self.assertNotIn(
+            "GHOSTLOCK_SENTINEL_EXTERNAL_CYCLE", ripley.exploit_env
+        )
+        self.assertNotIn(
+            "GHOSTLOCK_SENTINEL_EARLY",
+            targets["portal-go-terry-5051355900018050"].exploit_env,
+        )
+        makefile = (REPOSITORY / "exploit/Makefile").read_text()
+        self.assertIn("MAIN_SRC ?= $(SRC_DIR)/main.c", makefile)
+        target_mk = (
+            REPOSITORY
+            / "exploit/targets/portal-ripley-2041515800015050/target.mk"
+        ).read_text()
+        self.assertIn("MAIN_SRC := $(TARGET_DIR)/main.c", target_mk)
+        self.assertIn("ROOT_SRC := $(TARGET_DIR)/root.c", target_mk)
 
     def test_cipher_cleanup_guard_does_not_change_other_targets(self) -> None:
         cipher_header = (
