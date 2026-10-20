@@ -96,8 +96,9 @@ needs to remain in view during the reboot sequence.
 | Meta Portal Mini | `omni` | 10 | `Facebook/omni_prod/omni:10/QKQ1.210213.001/3051355900018050:user/prod-keys` | `4.9.227-perf+` | Tested |
 | Meta Portal TV | `ripley` | 9 | `Facebook/ripley_prod/ripley:9/PKQ1.191202.001/2041515800015050:user/prod-keys` | `4.4.153+` | Tested |
 
-Thank you to @protocol113 for providing Portal TV access and sharing the
-exploit timing observations that helped validate `ripley` support.
+Thank you to [@protocol113](https://github.com/protocol113) for providing
+Portal TV access and sharing the exploit timing observations that helped
+validate `ripley` support.
 
 Support is exact-build specific. Other models and firmware versions
 need their own verified target before the provisioner will accept them.
